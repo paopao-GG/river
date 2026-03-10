@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -l \"WiFi\\\\|firebase\\\\|HTTP\\\\|MQTT\" \"c:/Users/satui/OneDrive/Desktop/04 COMISSION_PROJECTS/PG_WATERING SYSTEM\"/*.ino \"c:/Users/satui/OneDrive/Desktop/04 COMISSION_PROJECTS/ezra-PG\"/*.ino)",
+      "Bash(node --version)",
+      "Bash(python -:*)",
+      "Bash(curl -s -L \"https://github.com/mobizt/Firebase-ESP8266/archive/refs/heads/master.zip\" -o \"C:/tmp/FirebaseESP8266.zip\")",
+      "Bash(unzip -q FirebaseESP8266.zip -d FirebaseESP8266_extract)"
+    ]
+  }
+}

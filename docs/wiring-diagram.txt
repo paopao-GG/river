@@ -1,0 +1,152 @@
+BUP CPE River Monitoring System -- Wiring Diagram (Per Node)
+=============================================================
+
+Board: NodeMCU 1.0 (ESP-12E)
+
+
+===============================================================
+  POWER SYSTEM
+===============================================================
+
+  [6V / 2W Solar Panel]
+         |  +
+         v
+  +------+--------+
+  |  TP4056+DW01A  |  (charge controller + battery protection)
+  |  Charge Board  |
+  +--+----+--------+
+     |    |
+    B+   B-
+     |    |
+  +--+----+--+--+----+--+
+  | 18650 Cell #1      |  (3.7V, 3000mAh)
+  | 18650 Cell #2      |  (parallel -- same voltage, double capacity)
+  +--------------------+
+         |
+      Battery+  (3.7V - 4.2V rail)  <-- THIS IS THE MAIN POWER RAIL
+         |
+  +------+------+
+  |   HT7333    |  (3.3V LDO regulator, low quiescent current)
+  |  IN  OUT GND|
+  +--+----+--+--+
+     |    |  |
+     |   3.3V GND
+     |    |   |
+     |   ESP8266 power (3V3 + GND pins)
+     |
+  (Battery+ rail also feeds voltage divider -- see below)
+
+
+===============================================================
+  ESP8266 (NodeMCU 1.0) PIN CONNECTIONS
+===============================================================
+
+  NodeMCU Pin   -->  Connection
+  ------------      -----------------------------------------------
+  3V3           <-- 3.3V bus (from HT7333 OUT)
+  GND           <-- GND bus
+
+  GPIO16 (D0)  ----wire----> RST pin on the SAME NodeMCU board
+                              MANDATORY for deep sleep wake-up.
+                              Without this wire the device sleeps forever.
+
+  GPIO5  (D1)  -----------> AJ-SR04M TRIG pin
+  GPIO12 (D6)  -----------> AJ-SR04M ECHO pin
+
+  GPIO4  (D2)  -----------> YF-DN50 SIGNAL (yellow wire)
+                             Also connect a 10k resistor from D2 to 3.3V
+                             (pull-up -- prevents phantom pulse counts when idle)
+
+  A0           --[100k R1]--> Battery+ rail (3.7-4.2V)
+                         |
+                      reads A0     (midpoint = ~half of battery voltage)
+                         |
+               --[100k R2]--> GND
+
+
+===============================================================
+  AJ-SR04M WATERPROOF ULTRASONIC SENSOR
+===============================================================
+
+  Mode: Mode 1 (HC-SR04 compatible)
+  Config: R19 resistor on PCB left OPEN (default on most units)
+
+  AJ-SR04M Pin  -->  NodeMCU Pin
+  -------------      ------------
+  VCC           -->  3.3V bus
+  GND           -->  GND bus
+  TRIG          -->  GPIO5  (D1)
+  ECHO          -->  GPIO12 (D6)
+
+  The waterproof probe connects via cable to the AJ-SR04M board.
+  Mount the probe pointing STRAIGHT DOWN above the water surface.
+  Minimum 20cm clearance from probe face to highest water level (dead zone).
+  Keep the control PCB inside the IP67 enclosure -- it is NOT waterproof.
+
+
+===============================================================
+  YF-DN50 WATER FLOW SENSOR
+===============================================================
+
+  Wire Color    -->  Connection
+  ----------         ------------------------------------------
+  RED (VCC)     -->  3.3V bus*
+  BLACK (GND)   -->  GND bus
+  YELLOW (SIG)  -->  GPIO4 (D2) + 10k pullup to 3.3V
+
+  * If the Hall-effect sensor is unreliable at 3.3V (rare), power
+    RED from Battery+ rail (3.7-4.2V) instead. The signal wire with
+    the 10k pullup to 3.3V is ESP-safe regardless.
+
+  INSTALLATION: The YF-DN50 is an INLINE PIPE sensor.
+  It must have water flowing THROUGH it in a closed 2" pipe.
+  DO NOT place it directly in the open river channel.
+
+  Diversion pipe setup at each node:
+    1. Submerge 2" PVC intake pipe in river with mesh screen on inlet
+    2. Route pipe through YF-DN50 (note flow direction arrow on body)
+    3. Exit pipe lets water return to river via gravity/siphon
+    4. Secure all piping to bank or structure
+
+  Pulse formula: frequency_Hz = 0.2 * flow_Lpm  (~12 pulses/liter)
+
+
+===============================================================
+  COMPLETE NODE WIRING OVERVIEW (ASCII)
+===============================================================
+
+  [Solar 6V] ----> [TP4056] ----> [18650 x2 parallel]
+                                         |
+                                    Battery+ rail
+                                    /            \
+                               [HT7333]        [R1 100k]
+                                  |                |
+                               3.3V bus         [A0 pin]
+                                  |                |
+                          +-------+------+      [R2 100k]
+                          |  NodeMCU 1.0 |         |
+                          |              |         GND
+      AJ-SR04M VCC <----- | 3V3          |
+      AJ-SR04M TRIG <---- | D1 (GPIO5)   |
+      AJ-SR04M ECHO ----> | D6 (GPIO12)  |
+                          |              |
+      YF-DN50 SIG ------> | D2 (GPIO4)  |  <-- 10k pullup to 3.3V
+                          |              |
+                          | D0 (GPIO16) -+----> RST  (deep sleep wire)
+                          |              |
+                          | GND ---------+-----> GND bus
+                          +--------------+
+
+
+===============================================================
+  ENCLOSURE NOTES
+===============================================================
+
+  - Use IP67 ABS junction box for all electronics
+  - Route cables through PG7 or PG9 waterproof cable glands
+  - Include silica gel desiccant packs inside
+  - Mount at least 50cm above expected flood line
+  - Install a rain/sun shield cone above the ultrasonic probe
+  - Angle solar panel south (Philippines: ~15 degrees tilt)
+  - Solder all connections -- no breadboard in field deployment
+  - Apply conformal coating to PCBs for moisture resistance

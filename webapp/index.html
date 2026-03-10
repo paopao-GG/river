@@ -1,0 +1,575 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BUP CPE River Monitor</title>
+
+  <!-- Firebase compat SDK (works with plain script tags, no bundler) -->
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-database-compat.js"></script>
+
+  <!-- Chart.js + date adapter for time-series X axis -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+
+  <style>
+    /* ── Reset & Base ───────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Segoe UI', Arial, sans-serif;
+      background: #0f1923;
+      color: #e0e6ed;
+      min-height: 100vh;
+    }
+
+    /* ── Header ─────────────────────────────────────────── */
+    header {
+      background: #1a2634;
+      border-bottom: 2px solid #0d7377;
+      padding: 14px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    header h1 {
+      font-size: 1.2rem;
+      font-weight: 600;
+      color: #4fc3f7;
+      letter-spacing: 0.5px;
+    }
+    header h1 span { color: #81d4fa; font-weight: 400; }
+    #last-refresh {
+      font-size: 0.78rem;
+      color: #7a9bb5;
+    }
+
+    /* ── Alert Banner ────────────────────────────────────── */
+    #alert-banner {
+      display: none;
+      background: #c0392b;
+      color: #fff;
+      padding: 10px 24px;
+      font-size: 0.9rem;
+      font-weight: 500;
+      border-bottom: 2px solid #e74c3c;
+    }
+    #alert-banner.active { display: block; }
+    #alert-text { margin-right: 12px; }
+    #alert-close {
+      cursor: pointer;
+      opacity: 0.8;
+      background: none;
+      border: none;
+      color: #fff;
+      font-size: 1rem;
+      float: right;
+    }
+
+    /* ── Main Layout ─────────────────────────────────────── */
+    main { padding: 20px; max-width: 1200px; margin: 0 auto; }
+
+    /* ── Node Cards ──────────────────────────────────────── */
+    .node-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+    .node-card {
+      background: #1a2634;
+      border-radius: 10px;
+      border-top: 4px solid #0d7377;
+      padding: 18px;
+      transition: border-color 0.3s;
+    }
+    .node-card.alert  { border-top-color: #e74c3c; }
+    .node-card.offline { border-top-color: #7f8c8d; opacity: 0.75; }
+
+    .node-card h2 {
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: #7a9bb5;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      margin-bottom: 4px;
+      display: flex;
+      align-items: center;
+      gap: 7px;
+    }
+
+    /* Status dot */
+    .status-dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      background: #7f8c8d;        /* grey = no data yet */
+      transition: background 0.4s;
+    }
+    .status-dot.online  { background: #27ae60; box-shadow: 0 0 5px #27ae6088; }
+    .status-dot.offline { background: #e74c3c; box-shadow: 0 0 5px #e74c3c88; }
+    .node-card .node-id {
+      font-size: 0.72rem;
+      color: #4a6278;
+      margin-bottom: 14px;
+    }
+    .metric-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      margin-bottom: 8px;
+    }
+    .metric-label {
+      font-size: 0.78rem;
+      color: #7a9bb5;
+    }
+    .metric-value {
+      font-size: 1.25rem;
+      font-weight: 700;
+      color: #e0e6ed;
+    }
+    .metric-unit {
+      font-size: 0.72rem;
+      color: #7a9bb5;
+      margin-left: 3px;
+    }
+
+    /* Water level value -- turns red when alert */
+    .node-card.alert .wl-value { color: #e74c3c; }
+
+
+    /* Footer meta */
+    .card-footer {
+      display: flex;
+      justify-content: space-between;
+      margin-top: 10px;
+      padding-top: 10px;
+      border-top: 1px solid #253545;
+      font-size: 0.72rem;
+      color: #4a6278;
+    }
+    .last-seen.stale { color: #e74c3c; }
+
+    /* ── Chart Section ───────────────────────────────────── */
+    .chart-section {
+      background: #1a2634;
+      border-radius: 10px;
+      padding: 18px;
+    }
+    .chart-controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-bottom: 14px;
+      align-items: center;
+    }
+    .chart-controls label {
+      font-size: 0.78rem;
+      color: #7a9bb5;
+      margin-right: 4px;
+    }
+    .chart-controls select {
+      background: #253545;
+      color: #e0e6ed;
+      border: 1px solid #2c3e50;
+      border-radius: 5px;
+      padding: 5px 10px;
+      font-size: 0.82rem;
+      cursor: pointer;
+    }
+    .range-btns { display: flex; gap: 6px; }
+    .range-btn {
+      background: #253545;
+      color: #7a9bb5;
+      border: 1px solid #2c3e50;
+      border-radius: 5px;
+      padding: 5px 12px;
+      font-size: 0.8rem;
+      cursor: pointer;
+      transition: background 0.2s, color 0.2s;
+    }
+    .range-btn.active, .range-btn:hover {
+      background: #0d7377;
+      color: #fff;
+      border-color: #0d7377;
+    }
+    .chart-wrapper { position: relative; height: 320px; }
+
+    /* ── Responsive ──────────────────────────────────────── */
+    @media (max-width: 600px) {
+      header h1 { font-size: 1rem; }
+      .metric-value { font-size: 1.1rem; }
+    }
+  </style>
+</head>
+
+<body>
+  <header>
+    <h1>BUP CPE <span>River Monitor</span></h1>
+    <div id="last-refresh">Last refresh: --</div>
+  </header>
+
+  <div id="alert-banner">
+    <span id="alert-text"></span>
+    <button id="alert-close" onclick="dismissAlert()">&#x2715;</button>
+  </div>
+
+  <main>
+    <!-- Node cards (generated by JS) -->
+    <div class="node-grid" id="node-grid"></div>
+
+    <!-- Chart section -->
+    <div class="chart-section">
+      <div class="chart-controls">
+        <div>
+          <label for="node-select">Node:</label>
+          <select id="node-select" onchange="onNodeSelect()">
+            <option value="all">All Nodes</option>
+            <option value="node-01">Node 01</option>
+            <option value="node-02">Node 02</option>
+            <option value="node-03">Node 03</option>
+          </select>
+        </div>
+        <div>
+          <label>Metric:</label>
+          <select id="metric-select" onchange="reloadChart()">
+            <option value="waterLevel_cm">Water Level (cm)</option>
+            <option value="flowRate_lpm">Flow Rate (L/min)</option>
+          </select>
+        </div>
+        <div class="range-btns">
+          <button class="range-btn active" onclick="setRange(1, this)">1H</button>
+          <button class="range-btn" onclick="setRange(6, this)">6H</button>
+          <button class="range-btn" onclick="setRange(24, this)">24H</button>
+          <button class="range-btn" onclick="setRange(168, this)">7D</button>
+        </div>
+      </div>
+      <div class="chart-wrapper">
+        <canvas id="chart"></canvas>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    // ================================================================
+    // TODO: REPLACE with your Firebase project config
+    // Get from: Firebase Console > Project Settings > General > Your apps
+    // ================================================================
+    const firebaseConfig = {
+      apiKey:            "YOUR_FIREBASE_WEB_API_KEY",
+      authDomain:        "YOUR_PROJECT_ID.firebaseapp.com",
+      databaseURL:       "https://YOUR_PROJECT_ID-default-rtdb.asia-southeast1.firebasedatabase.app",
+      projectId:         "YOUR_PROJECT_ID",
+      storageBucket:     "YOUR_PROJECT_ID.firebasestorage.app",
+      messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
+      appId:             "YOUR_APP_ID"
+    };
+
+    // ================================================================
+    // CONFIGURATION
+    // ================================================================
+    const NODE_IDS = ["node-01", "node-02", "node-03"];
+    const NODE_COLORS = {
+      "node-01": "#4fc3f7",
+      "node-02": "#81c784",
+      "node-03": "#ffb74d"
+    };
+
+    // State
+    let db;
+    let nodeConfigs  = {};
+    let latestData   = {};
+    let activeAlerts = new Set();
+    let chartHours   = 1;
+    let chart;
+
+    // ================================================================
+    // INIT
+    // ================================================================
+    firebase.initializeApp(firebaseConfig);
+    db = firebase.database();
+
+    buildNodeCards();
+    initChart();
+    startListeners();
+
+    // ================================================================
+    // Build the 3 node card DOM elements
+    // ================================================================
+    function buildNodeCards() {
+      const grid = document.getElementById('node-grid');
+      NODE_IDS.forEach(id => {
+        const card = document.createElement('div');
+        card.className = 'node-card';
+        card.id = 'card-' + id;
+        card.innerHTML = `
+          <h2><span class="status-dot" id="dot-${id}"></span><span class="card-location" id="loc-${id}">Loading...</span></h2>
+          <div class="node-id">${id}</div>
+
+          <div class="metric-row">
+            <span class="metric-label">Water Level</span>
+            <span>
+              <span class="metric-value wl-value" id="wl-${id}">--</span>
+              <span class="metric-unit">cm</span>
+            </span>
+          </div>
+
+          <div class="metric-row">
+            <span class="metric-label">Flow Rate</span>
+            <span>
+              <span class="metric-value" id="fr-${id}">--</span>
+              <span class="metric-unit">L/min</span>
+            </span>
+          </div>
+
+          <div class="card-footer">
+            <span>RSSI: <span id="rs-${id}">--</span> dBm</span>
+            <span class="last-seen" id="ls-${id}">never</span>
+          </div>
+        `;
+        grid.appendChild(card);
+      });
+    }
+
+    // ================================================================
+    // Start Firebase real-time listeners for each node
+    // ================================================================
+    function startListeners() {
+      NODE_IDS.forEach(nodeId => {
+        // Load config once
+        db.ref(`devices/${nodeId}/config`).once('value', snap => {
+          if (snap.exists()) {
+            nodeConfigs[nodeId] = snap.val();
+            const loc = snap.val().location || nodeId;
+            document.getElementById('loc-' + nodeId).textContent = loc;
+          }
+        });
+
+        // Real-time listener for the latest reading
+        // Using 'value' (not 'child_added') so it fires reliably on load + every update
+        db.ref(`devices/${nodeId}/readings`)
+          .orderByKey()
+          .limitToLast(1)
+          .on('value', snap => {
+            if (!snap.exists()) return;
+            snap.forEach(child => {
+              updateNodeCard(nodeId, child.val());
+            });
+          });
+      });
+
+      // Refresh "last seen" timers every 30 seconds
+      setInterval(refreshTimestamps, 30000);
+    }
+
+    // ================================================================
+    // Update a node card with the latest reading
+    // ================================================================
+    function updateNodeCard(nodeId, data) {
+      if (!data) return;
+      latestData[nodeId] = data;
+
+      const wl = data.waterLevel_cm != null ? data.waterLevel_cm.toFixed(1) : '--';
+      const fr = data.flowRate_lpm  != null ? data.flowRate_lpm.toFixed(1)  : '--';
+      const rs = data.rssi_dbm      != null ? data.rssi_dbm                  : '--';
+
+      document.getElementById('wl-' + nodeId).textContent = wl;
+      document.getElementById('fr-' + nodeId).textContent = fr;
+      document.getElementById('rs-' + nodeId).textContent = rs;
+
+      // Last seen (Firebase timestamp is in ms)
+      if (data.timestamp) {
+        const epochSec = data.timestamp / 1000;
+        const el = document.getElementById('ls-' + nodeId);
+        el.textContent = timeAgo(epochSec);
+        const stale = (Date.now() / 1000 - epochSec) > 600;  // 10 min
+        el.classList.toggle('stale', stale);
+        document.getElementById('card-' + nodeId).classList.toggle('offline', stale);
+        const dot = document.getElementById('dot-' + nodeId);
+        dot.classList.toggle('online',  !stale);
+        dot.classList.toggle('offline',  stale);
+      }
+
+      // Alert check
+      checkAlert(nodeId, data);
+
+      // Update refresh time
+      document.getElementById('last-refresh').textContent =
+        'Last refresh: ' + new Date().toLocaleTimeString();
+    }
+
+    // ================================================================
+    // Refresh "X min ago" labels without re-querying Firebase
+    // ================================================================
+    function refreshTimestamps() {
+      NODE_IDS.forEach(nodeId => {
+        const data = latestData[nodeId];
+        if (!data || !data.timestamp) return;
+        const epochSec = data.timestamp / 1000;
+        const el = document.getElementById('ls-' + nodeId);
+        el.textContent = timeAgo(epochSec);
+        const stale = (Date.now() / 1000 - epochSec) > 600;
+        el.classList.toggle('stale', stale);
+        document.getElementById('card-' + nodeId).classList.toggle('offline', stale);
+        const dot = document.getElementById('dot-' + nodeId);
+        dot.classList.toggle('online',  !stale);
+        dot.classList.toggle('offline',  stale);
+      });
+    }
+
+    // ================================================================
+    // Alert system -- check water level vs config threshold
+    // ================================================================
+    function checkAlert(nodeId, data) {
+      const cfg = nodeConfigs[nodeId];
+      const threshold = cfg ? cfg.alertThreshold_cm : null;
+      const wl = data.waterLevel_cm;
+      const card = document.getElementById('card-' + nodeId);
+
+      if (threshold != null && wl != null && wl >= threshold) {
+        activeAlerts.add(nodeId);
+        card.classList.add('alert');
+        showAlertBanner();
+      } else {
+        activeAlerts.delete(nodeId);
+        card.classList.remove('alert');
+        if (activeAlerts.size === 0) {
+          document.getElementById('alert-banner').classList.remove('active');
+        } else {
+          showAlertBanner();
+        }
+      }
+    }
+
+    function showAlertBanner() {
+      const names = [...activeAlerts].map(id => {
+        const loc = nodeConfigs[id] ? nodeConfigs[id].location : id;
+        const wl  = latestData[id]  ? latestData[id].waterLevel_cm.toFixed(1) : '?';
+        const thr = nodeConfigs[id] ? nodeConfigs[id].alertThreshold_cm : '?';
+        return `${loc} (${wl}cm >= ${thr}cm)`;
+      });
+      document.getElementById('alert-text').textContent =
+        'WARNING: Water level threshold exceeded at: ' + names.join(', ');
+      document.getElementById('alert-banner').classList.add('active');
+    }
+
+    function dismissAlert() {
+      document.getElementById('alert-banner').classList.remove('active');
+    }
+
+    // ================================================================
+    // Chart
+    // ================================================================
+    function initChart() {
+      const ctx = document.getElementById('chart').getContext('2d');
+      chart = new Chart(ctx, {
+        type: 'line',
+        data: { datasets: [] },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          animation: false,
+          interaction: { mode: 'index', intersect: false },
+          plugins: {
+            legend: {
+              labels: { color: '#7a9bb5', font: { size: 12 } }
+            },
+            tooltip: {
+              backgroundColor: '#1a2634',
+              titleColor: '#4fc3f7',
+              bodyColor: '#e0e6ed',
+              borderColor: '#2c3e50',
+              borderWidth: 1
+            }
+          },
+          scales: {
+            x: {
+              type: 'time',
+              time: { unit: 'minute', displayFormats: { minute: 'HH:mm', hour: 'MMM d HH:mm' } },
+              ticks: { color: '#7a9bb5', maxTicksLimit: 8 },
+              grid:  { color: '#1e2d3d' }
+            },
+            y: {
+              ticks: { color: '#7a9bb5' },
+              grid:  { color: '#1e2d3d' },
+              title: { display: true, color: '#7a9bb5', text: 'Water Level (cm)' }
+            }
+          }
+        }
+      });
+
+      reloadChart();
+    }
+
+    function setRange(hours, btn) {
+      chartHours = hours;
+      document.querySelectorAll('.range-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      reloadChart();
+    }
+
+    function onNodeSelect() { reloadChart(); }
+
+    function reloadChart() {
+      if (!chart) return;
+      const selectedNode  = document.getElementById('node-select').value;
+      const selectedMetric = document.getElementById('metric-select').value;
+      const metricLabel = selectedMetric === 'waterLevel_cm' ? 'Water Level (cm)' : 'Flow Rate (L/min)';
+
+      chart.options.scales.y.title.text = metricLabel;
+
+      const nodesToLoad = selectedNode === 'all' ? NODE_IDS : [selectedNode];
+      const startMs = Date.now() - chartHours * 3600 * 1000;
+      const startKey = String(Math.floor(startMs));  // Firebase push keys are time-ordered
+
+      chart.data.datasets = [];
+
+      let pending = nodesToLoad.length;
+
+      nodesToLoad.forEach(nodeId => {
+        db.ref(`devices/${nodeId}/readings`)
+          .orderByChild('timestamp')
+          .startAt(startMs)
+          .once('value', snap => {
+            const points = [];
+            snap.forEach(child => {
+              const d = child.val();
+              if (d.timestamp && d[selectedMetric] != null) {
+                points.push({ x: d.timestamp, y: d[selectedMetric] });
+              }
+            });
+
+            chart.data.datasets.push({
+              label: (nodeConfigs[nodeId] ? nodeConfigs[nodeId].location : nodeId),
+              data: points,
+              borderColor: NODE_COLORS[nodeId] || '#fff',
+              backgroundColor: (NODE_COLORS[nodeId] || '#fff') + '22',
+              borderWidth: 2,
+              pointRadius: points.length > 100 ? 0 : 3,
+              tension: 0.3,
+              fill: false
+            });
+
+            pending--;
+            if (pending === 0) chart.update();
+          });
+      });
+    }
+
+    // ================================================================
+    // Utility -- relative time formatter
+    // ================================================================
+    function timeAgo(epochSeconds) {
+      const diff = Math.floor(Date.now() / 1000) - epochSeconds;
+      if (diff < 0)     return 'just now';
+      if (diff < 60)    return diff + 's ago';
+      if (diff < 3600)  return Math.floor(diff / 60) + 'm ago';
+      if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+      return Math.floor(diff / 86400) + 'd ago';
+    }
+  </script>
+</body>
+</html>

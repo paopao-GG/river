@@ -1,0 +1,38 @@
+{
+  "rules": {
+    ".read": true,
+    ".write": true
+  }
+}
+
+// ---------------------------------------------------------------
+// DEVELOPMENT RULES (above): Fully open -- use during testing only.
+//
+// PRODUCTION RULES (apply before public deployment):
+// Replace the rules above with the block below.
+//
+// {
+//   "rules": {
+//     "devices": {
+//       "$nodeId": {
+//         "readings": {
+//           ".read": true,
+//           ".write": "auth != null",
+//           ".indexOn": [".key"]
+//         },
+//         "config": {
+//           ".read": true,
+//           ".write": false
+//         }
+//       }
+//     },
+//     "alerts": {
+//       ".read": true,
+//       ".write": false
+//     }
+//   }
+// }
+//
+// Also enable Anonymous Authentication in:
+// Firebase Console > Authentication > Sign-in method > Anonymous
+// ---------------------------------------------------------------

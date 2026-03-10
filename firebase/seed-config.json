@@ -1,0 +1,31 @@
+{
+  "devices": {
+    "node-01": {
+      "config": {
+        "location": "Upstream Station",
+        "lat": 0.0,
+        "lng": 0.0,
+        "readingInterval_ms": 300000,
+        "alertThreshold_cm": 200
+      }
+    },
+    "node-02": {
+      "config": {
+        "location": "Midstream Station",
+        "lat": 0.0,
+        "lng": 0.0,
+        "readingInterval_ms": 300000,
+        "alertThreshold_cm": 200
+      }
+    },
+    "node-03": {
+      "config": {
+        "location": "Downstream Station",
+        "lat": 0.0,
+        "lng": 0.0,
+        "readingInterval_ms": 300000,
+        "alertThreshold_cm": 200
+      }
+    }
+  }
+}
