@@ -4,18 +4,54 @@
 
 ---
 
+## Repository Structure
+
+```
+bup-cpe-river/
+├── docs/                     Documentation
+│   ├── GUIDE.md              This build guide
+│   ├── project.md            Project overview and requirements
+│   ├── prediction-method.md  How the water level prediction works
+│   ├── wiring-diagram.txt    V1 wiring (AJ-SR04M, ASCII art)
+│   └── wiring-guide-v2.md    V2 wiring (A0120AG RS485 + C25B)
+├── firebase/                 Firebase configuration
+│   ├── database.rules.json   RTDB security rules
+│   └── seed-config.json      Initial node config (import into RTDB)
+├── firmware/
+│   ├── v1/                   V1 firmware (AJ-SR04M ultrasonic, solar+battery)
+│   │   ├── node-01/          Upstream (Centro)
+│   │   ├── node-02/          Midstream (Napo)
+│   │   ├── node-03/          Downstream (Balinad)
+│   │   └── sensor-test/      Standalone sensor test sketch
+│   └── v2/                   V2 firmware (A0120AG RS485, 12V powered)
+│       ├── station-01/       Upstream (Centro)
+│       ├── station-02/       Midstream (Napo)
+│       ├── station-03/       Downstream (Balinad)
+│       ├── sensor-test/      RS485 sensor test
+│       ├── sensor-test-pwm/  PWM sensor test
+│       ├── sensor-test-simple/
+│       └── sensor-test-uart/ UART sensor test
+└── webapp/
+    └── index.html            Real-time dashboard (single-page)
+```
+
+**V1 vs V2:** V1 uses the AJ-SR04M waterproof ultrasonic sensor (direct GPIO trigger/echo) with solar+battery power. V2 uses the A0120AG industrial RS485 ultrasonic sensor (via C25B TTL-RS485 converter) with a 12V external power supply. Both versions share the same YF-DN50 flow sensor and Firebase backend.
+
+---
+
 ## Table of Contents
 
 1. [Parts List](#1-parts-list)
 2. [Wiring the Node](#2-wiring-the-node)
 3. [Arduino IDE Setup](#3-arduino-ide-setup)
 4. [Firebase Setup](#4-firebase-setup)
-5. [Flashing the Firmware](#5-flashing-the-firmware)
-6. [Bench Testing](#6-bench-testing)
-7. [Running the Dashboard](#7-running-the-dashboard)
-8. [Deploying to Firebase Hosting](#8-deploying-to-firebase-hosting)
-9. [Field Deployment](#9-field-deployment)
-10. [Troubleshooting](#10-troubleshooting)
+5. [Flashing the Firmware (V1)](#5-flashing-the-firmware-v1)
+6. [Flashing the Firmware (V2)](#6-flashing-the-firmware-v2)
+7. [Bench Testing](#7-bench-testing)
+8. [Running the Dashboard](#8-running-the-dashboard)
+9. [Deploying to Firebase Hosting](#9-deploying-to-firebase-hosting)
+10. [Field Deployment](#10-field-deployment)
+11. [Troubleshooting](#11-troubleshooting)
 
 ---
 
@@ -270,9 +306,9 @@ This seeds the database with location names and alert thresholds for all 3 nodes
 You should now see this in the database:
 ```
 devices/
-  node-01/config/location: "Upstream Station"
-  node-02/config/location: "Midstream Station"
-  node-03/config/location: "Downstream Station"
+  station-01/config/location: "Centro Station"
+  station-02/config/location: "Napo Station"
+  station-03/config/location: "Balinad Station"
 ```
 
 > Edit the location names and `alertThreshold_cm` values directly in the Firebase Console to match your actual deployment site.
@@ -287,15 +323,18 @@ For now (development), keep Test mode rules. Before making the dashboard public,
 
 ---
 
-## 5. Flashing the Firmware
+## 5. Flashing the Firmware (V1)
 
-Each of the 3 NodeMCU boards gets its own sketch from the `firmware/` folder.
+> **V1 hardware** uses the AJ-SR04M ultrasonic sensor with direct GPIO trigger/echo.
+> For the V2 hardware (A0120AG RS485 sensor), skip to [Section 6](#6-flashing-the-firmware-v2).
+
+Each of the 3 NodeMCU boards gets its own sketch from the `firmware/v1/` folder.
 
 ### 5.1 Fill In Your Credentials
 
 Open each sketch file and replace the placeholder values at the top:
 
-**`firmware/node-01/node-01.ino`** (and same for node-02, node-03):
+**`firmware/v1/node-01/node-01.ino`** (and same for node-02, node-03):
 
 ```cpp
 const char* WIFI_SSID     = "YourActualWiFiName";
@@ -307,9 +346,9 @@ const char* WIFI_PASSWORD = "YourActualWiFiPassword";
 ```
 
 The `NODE_ID` is already set in each file:
-- `node-01.ino` → `"node-01"` (Upstream Station)
-- `node-02.ino` → `"node-02"` (Midstream Station)
-- `node-03.ino` → `"node-03"` (Downstream Station)
+- `node-01.ino` → `"station-01"` (Upstream Station)
+- `node-02.ino` → `"station-02"` (Midstream Station)
+- `node-03.ino` → `"station-03"` (Downstream Station)
 
 Do not change `NODE_ID`.
 
@@ -330,7 +369,7 @@ Change the sleep time to 10 seconds so you don't wait 5 minutes between readings
 ### 5.3 Flash Each Board
 
 1. Plug the NodeMCU into your computer via USB
-2. Open `firmware/node-01/node-01.ino` in Arduino IDE
+2. Open `firmware/v1/node-01/node-01.ino` in Arduino IDE
 3. Confirm board settings (see Section 3.4)
 4. Select the correct COM port: **Tools → Port**
 5. Click **Upload** (→ arrow button)
@@ -339,11 +378,71 @@ Change the sleep time to 10 seconds so you don't wait 5 minutes between readings
 
 ---
 
-## 6. Bench Testing
+## 6. Flashing the Firmware (V2)
+
+> **V2 hardware** uses the A0120AG RS485 industrial ultrasonic sensor via a C25B TTL-RS485 converter module. It requires a 12V power supply for the sensor and SoftwareSerial for Modbus communication. See `docs/wiring-guide-v2.md` for the full wiring diagram.
+
+Each of the 3 boards gets its own sketch from the `firmware/v2/` folder.
+
+### 6.1 Additional Library
+
+V2 firmware uses `SoftwareSerial` (built-in with ESP8266 board package) — no extra library install needed beyond what's in Section 3.
+
+### 6.2 Fill In Your Credentials
+
+Open each sketch file and replace the placeholder values at the top:
+
+**`firmware/v2/station-01/station-01.ino`** (and same for station-02, station-03):
+
+```cpp
+const char* WIFI_SSID     = "YourActualWiFiName";
+const char* WIFI_PASSWORD = "YourActualWiFiPassword";
+
+#define FIREBASE_API_KEY  "AIzaSy..."           // from step 4.4
+#define FIREBASE_DB_URL   "bup-cpe-river-default-rtdb.asia-southeast1.firebasedatabase.app"
+```
+
+The `STATION_ID` is already set in each file:
+- `station-01.ino` → `"station-01"` (Upstream)
+- `station-02.ino` → `"station-02"` (Midstream)
+- `station-03.ino` → `"station-03"` (Downstream)
+
+Do not change `STATION_ID`.
+
+### 6.3 For Bench Testing — Shorten the Sleep
+
+Same as V1 — change `SLEEP_DURATION_US` to `10000000ULL` (10 seconds) for testing.
+
+### 6.4 Flash Each Board
+
+1. Plug the NodeMCU into your computer via USB
+2. Open `firmware/v2/station-01/station-01.ino` in Arduino IDE
+3. Confirm board settings (see Section 3.4)
+4. Select the correct COM port: **Tools → Port**
+5. Click **Upload** (→ arrow button)
+6. Wait for "Done uploading" in the status bar
+7. Repeat for station-02 and station-03 using their respective sketch folders
+
+### 6.5 V2 Pin Differences
+
+| ESP8266 Pin | V1 (AJ-SR04M) | V2 (A0120AG via C25B) |
+|---|---|---|
+| D1 (GPIO5) | Ultrasonic TRIG | *unused* |
+| D5 (GPIO14) | *unused* | C25B DE + RE (direction) |
+| D6 (GPIO12) | Ultrasonic ECHO | C25B RO (RS485 RX) |
+| D7 (GPIO13) | *unused* | C25B DI (RS485 TX) |
+| D2 (GPIO4) | YF-DN50 flow | YF-DN50 flow (same) |
+| A0 | Battery divider | *unused in V2* |
+
+> **Important:** V2 requires a **12V external power supply** for the A0120AG sensor. Do NOT connect 12V to the ESP8266. See `docs/wiring-guide-v2.md` for full details.
+
+---
+
+## 7. Bench Testing
 
 Test each node on your desk before field deployment. You need the node wired up but do not need water — use your hand or a flat object to test the ultrasonic sensor.
 
-### 6.1 Open Serial Monitor
+### 7.1 Open Serial Monitor
 
 After uploading, go to **Tools → Serial Monitor**. Set baud rate to **115200**.
 
@@ -354,7 +453,7 @@ You should see output like this:
 ```
 ========================================
   River Monitor Wake Cycle
-  Node: node-01
+  Node: station-01
 ========================================
 [Flow] Pulses=0  Freq=0.00Hz  Flow=0.0L/min
 [Sensor] Water Level : 142.5 cm
@@ -368,7 +467,7 @@ You should see output like this:
 [Sleep] Entering deep sleep for 10 seconds...
 ```
 
-### 6.2 Test the Ultrasonic Sensor
+### 7.2 Test the Ultrasonic Sensor
 
 Hold a flat object (book, wall, your palm) at different distances above the probe:
 - At ~30cm → Serial should read ~30cm
@@ -377,7 +476,7 @@ Hold a flat object (book, wall, your palm) at different distances above the prob
 
 If readings are erratic, check: TRIG → D1, ECHO → D6, VCC → 3.3V.
 
-### 6.3 Test the Flow Sensor
+### 7.3 Test the Flow Sensor
 
 Blow through the YF-DN50 pipe or spin the turbine impeller with a finger:
 - You should see non-zero pulses and flow L/min
@@ -385,19 +484,19 @@ Blow through the YF-DN50 pipe or spin the turbine impeller with a finger:
 
 If it shows phantom pulses with nothing moving, check the 10kΩ pull-up resistor is connected D2 → 3.3V.
 
-### 6.4 Test the Battery Reading
+### 7.4 Test the Battery Reading
 
 Check the battery voltage output against a multimeter reading on the actual battery:
 - Full charge 18650: ~4.1–4.2V
 - USB powered only: you may see ~3.3V (that's normal when no battery is connected)
 
-### 6.5 Test Firebase Data
+### 7.5 Test Firebase Data
 
 1. Open [console.firebase.google.com](https://console.firebase.google.com) → your project → **Realtime Database**
 2. After a successful send, you should see:
    ```
    devices/
-     node-01/
+     station-01/
        readings/
          -NxK3mAbc123.../
            waterLevel_cm: 142.5
@@ -408,7 +507,7 @@ Check the battery voltage output against a multimeter reading on the actual batt
    ```
 3. Every 10 seconds (bench test interval), a new entry appears
 
-### 6.6 Test Offline Buffer
+### 7.6 Test Offline Buffer
 
 1. Change the WiFi SSID to something wrong: `"WRONG_SSID"`
 2. Re-upload the sketch
@@ -419,9 +518,9 @@ Check the battery voltage output against a multimeter reading on the actual batt
 
 ---
 
-## 7. Running the Dashboard
+## 8. Running the Dashboard
 
-### 7.1 Fill In Firebase Config
+### 8.1 Fill In Firebase Config
 
 Open `webapp/index.html` in any text editor (Notepad++, VS Code, etc.).
 
@@ -441,7 +540,7 @@ const firebaseConfig = {
 
 Replace it with the full `firebaseConfig` block you copied in step 4.4.
 
-### 7.2 Run Locally
+### 8.2 Run Locally
 
 The Firebase SDK requires an HTTP server — it does **not** work when opened as `file://` directly from the file manager.
 
@@ -462,7 +561,7 @@ Open the URL it shows (usually `http://localhost:5000`).
 
 Install the "Live Server" extension in VS Code → right-click `index.html` → **Open with Live Server**.
 
-### 7.3 What You Should See
+### 8.3 What You Should See
 
 - **3 node cards** — each showing location name, water level, flow rate, battery bar, RSSI, and last-seen time
 - **Alert banner** (hidden by default) — appears red if any node's water level exceeds its threshold
@@ -473,11 +572,11 @@ If cards show `--` for all values, the Firebase credentials are wrong or the dat
 
 ---
 
-## 8. Deploying to Firebase Hosting
+## 9. Deploying to Firebase Hosting
 
 This makes the dashboard accessible from any browser at a public URL for free.
 
-### 8.1 Install Firebase CLI
+### 9.1 Install Firebase CLI
 
 If you haven't already:
 
@@ -485,7 +584,7 @@ If you haven't already:
 npm install -g firebase-tools
 ```
 
-### 8.2 Login and Initialize
+### 9.2 Login and Initialize
 
 ```bash
 firebase login
@@ -505,7 +604,7 @@ Answer the prompts:
 - **Set up automatic builds with GitHub?** → `N`
 - **Overwrite index.html?** → `N` (very important — keep your dashboard file)
 
-### 8.3 Deploy
+### 9.3 Deploy
 
 ```bash
 firebase deploy --only hosting
@@ -524,7 +623,7 @@ Open the **Hosting URL** in any browser — your dashboard is now live.
 
 Share this URL with supervisors, professors, or anyone who needs to monitor the river data.
 
-### 8.4 Redeploying After Changes
+### 9.4 Redeploying After Changes
 
 Any time you edit `index.html`, just run:
 
@@ -534,11 +633,11 @@ firebase deploy --only hosting
 
 ---
 
-## 9. Field Deployment
+## 10. Field Deployment
 
 Do this after all 3 nodes pass bench testing.
 
-### 9.1 Revert to 5-Minute Sleep
+### 10.1 Revert to 5-Minute Sleep
 
 In each firmware file, change back:
 
@@ -548,20 +647,20 @@ In each firmware file, change back:
 
 Re-upload to all 3 boards.
 
-### 9.2 Solder Everything
+### 10.2 Solder Everything
 
 Replace all breadboard jumpers with soldered connections. Use stranded 22 AWG wire.
 - Apply hot glue or epoxy over solder joints for vibration resistance
 - Tin all bare wire ends before inserting into terminal blocks
 
-### 9.3 Assemble the Enclosure
+### 10.3 Assemble the Enclosure
 
 1. Thread wires through **cable glands** before connecting them (easy to forget)
 2. Mount NodeMCU, AJ-SR04M PCB, TP4056, and HT7333 on standoffs or with double-sided foam tape inside the IP67 box
 3. Place **desiccant packs** inside
 4. Close and seal the box — tighten cable glands
 
-### 9.4 Mount at the Site
+### 10.4 Mount at the Site
 
 **Ultrasonic probe:**
 - Mount pointing **straight down** above the water
@@ -583,24 +682,24 @@ Replace all breadboard jumpers with soldered connections. Use stranded 22 AWG wi
 3. Exit pipe returns water to the river by gravity
 4. Secure all piping with metal hose clamps to stakes or the riverbank structure
 
-### 9.5 First Power-On at Site
+### 10.5 First Power-On at Site
 
 1. Power on with USB or connect the battery
 2. If you have a phone hotspot at the site, confirm the WiFi connects by checking Firebase Console for a new reading within 1–2 minutes
 3. Leave the device running for 30 minutes and verify readings are arriving consistently
 4. Check the dashboard on your phone using the deployed URL
 
-### 9.6 Update Node Locations in Firebase
+### 10.6 Update Node Locations in Firebase
 
 After physical placement, update the GPS coordinates in the Firebase Console:
 
-1. Go to **Realtime Database → devices → node-01 → config**
-2. Edit `lat` and `lng` to the actual GPS coordinates of that node
-3. Repeat for node-02 and node-03
+1. Go to **Realtime Database → devices → station-01 → config**
+2. Edit `lat` and `lng` to the actual GPS coordinates of that station
+3. Repeat for station-02 and station-03
 
 ---
 
-## 10. Troubleshooting
+## 11. Troubleshooting
 
 ### ESP8266 / Firmware
 
@@ -614,6 +713,15 @@ After physical placement, update the GPS coordinates in the Firebase Console:
 | Ultrasonic reads too high/wild | Condensation on probe / turbulence | Clean probe face; mount above turbulent area |
 | Flow reads 0 always | Pull-up resistor missing or wrong pin | Confirm 10kΩ from D2 to 3.3V |
 | Battery voltage reads 0 or wrong | Divider not connected / wrong ADC ref | Check both 100kΩ resistors and Battery+ rail |
+
+### ESP8266 / Firmware V2 (A0120AG RS485)
+
+| Symptom | Likely Cause | Fix |
+|---|---|---|
+| RS485 reads 0 or timeout | No shared ground between 12V PSU and ESP | Connect 12V PSU (-) to ESP GND |
+| RS485 reads garbage values | DE/RE not wired together or wrong pin | Both DE and RE must go to D5 (GPIO14) |
+| A0120AG no response | Wrong Modbus address or baud rate | Default is address `0x01`, baud `9600` — check sensor datasheet |
+| Sensor works on bench but not in field | 12V supply too weak or cable too long | Use a regulated 12V supply; keep RS485 cable under 10m |
 
 ### Dashboard
 
@@ -630,5 +738,5 @@ After physical placement, update the GPS coordinates in the Firebase Console:
 | Symptom | Likely Cause | Fix |
 |---|---|---|
 | `Permission denied` write error | DB rules too strict | Set rules to test-mode temporarily |
-| Data appears in DB but wrong node | NODE_ID mismatch | Verify each .ino has the correct NODE_ID defined |
+| Data appears in DB but wrong node | NODE_ID / STATION_ID mismatch | Verify each .ino has the correct NODE_ID (v1) or STATION_ID (v2) defined |
 | `seed-config.json` import fails | JSON has comments (invalid JSON) | The `database.rules.json` has comments — that file is NOT what you import. Import `seed-config.json` only |

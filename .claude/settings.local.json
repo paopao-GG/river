@@ -33,7 +33,24 @@
       "Bash(curl -s -X PATCH -d '{\"\"location\"\":\"\"Node 03 Balinad Station\"\"}' \"https://river-d1bc6-default-rtdb.asia-southeast1.firebasedatabase.app/devices/station-03/config.json\")",
       "Bash(curl -s -X PATCH -d '{\"\"location\"\":\"\"Centro Station\"\"}' \"https://river-d1bc6-default-rtdb.asia-southeast1.firebasedatabase.app/devices/station-01/config.json\")",
       "Bash(curl -s -X PATCH -d '{\"\"location\"\":\"\"Napo Station\"\"}' \"https://river-d1bc6-default-rtdb.asia-southeast1.firebasedatabase.app/devices/station-02/config.json\")",
-      "Bash(curl -s -X PATCH -d '{\"\"location\"\":\"\"Balinad Station\"\"}' \"https://river-d1bc6-default-rtdb.asia-southeast1.firebasedatabase.app/devices/station-03/config.json\")"
+      "Bash(curl -s -X PATCH -d '{\"\"location\"\":\"\"Balinad Station\"\"}' \"https://river-d1bc6-default-rtdb.asia-southeast1.firebasedatabase.app/devices/station-03/config.json\")",
+      "Bash(mkdir -p firmware/v1 firmware/v2)",
+      "Bash(mv firmware/node-01 firmware/node-02 firmware/node-03 firmware/sensor-test firmware/v1/)",
+      "Bash(mv firmware-v2/sensor-test firmware-v2/sensor-test-pwm firmware-v2/sensor-test-simple firmware-v2/sensor-test-uart firmware-v2/station-01 firmware-v2/station-02 firmware-v2/station-03 firmware/v2/)",
+      "Bash(rmdir firmware-v2:*)",
+      "Bash(for d:*)",
+      "Bash(do mv:*)",
+      "Bash(done)",
+      "Bash(mv \"firmware/node-02\" \"firmware/v1/\")",
+      "Bash(cp -r firmware/node-02 firmware/v1/node-02)",
+      "Bash(rm -rf firmware/node-02)",
+      "Bash(do cp:*)",
+      "Bash(rm -rf \"firmware-v2/$d\")",
+      "Bash(rm -rf firmware-v2)",
+      "Bash(mv GUIDE.md project.md docs/)",
+      "Bash(sed -i 's/#define SLEEP_DURATION_US  60000000ULL/#define SLEEP_DURATION_US  30000000ULL   \\\\/\\\\/ 30 seconds/' firmware/v1/node-01/node-01.ino firmware/v1/node-02/node-02.ino firmware/v1/node-03/node-03.ino)",
+      "Bash(sed -i 's/#define SLEEP_DURATION_US  10000000ULL.*/#define SLEEP_DURATION_US  30000000ULL   \\\\/\\\\/ 30 seconds/' firmware/v2/station-01/station-01.ino firmware/v2/station-02/station-02.ino firmware/v2/station-03/station-03.ino)",
+      "Bash(grep -rn \"SLEEP_DURATION_US\" firmware/v1/node-*/node-*.ino firmware/v2/station-*/station-*.ino)"
     ]
   }
 }

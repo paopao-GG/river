@@ -339,6 +339,7 @@
           <button class="range-btn" onclick="setRange(168, this)">7D</button>
           <button class="range-btn" onclick="setRange(720, this)">30D</button>
         </div>
+        <button class="range-btn" onclick="exportCSV()" style="margin-left:auto;">Export CSV</button>
       </div>
       <div class="chart-wrapper">
         <canvas id="chart"></canvas>
@@ -1005,6 +1006,59 @@
     // ================================================================
     // Utility -- relative time formatter
     // ================================================================
+    // ================================================================
+    // Export CSV
+    // ================================================================
+    function exportCSV() {
+      const selectedNode  = document.getElementById('node-select').value;
+      const nodesToLoad = selectedNode === 'all' ? STATION_IDS : [selectedNode];
+      const startMs = Date.now() - chartHours * 3600 * 1000;
+
+      let allRows = [];
+      let pending = nodesToLoad.length;
+
+      nodesToLoad.forEach(nodeId => {
+        db.ref(`devices/${nodeId}/readings`)
+          .orderByChild('timestamp')
+          .startAt(startMs)
+          .once('value', snap => {
+            snap.forEach(child => {
+              const d = child.val();
+              if (d.timestamp) {
+                const wl = d.waterLevel_cm != null ? distanceToWaterLevel(d.waterLevel_cm, nodeId) : '';
+                const fr = d.flowRate_lpm != null ? d.flowRate_lpm : '';
+                allRows.push({
+                  station: NODE_NAMES[nodeId] || nodeId,
+                  node: NODE_LABELS[nodeId] || nodeId,
+                  timestamp: d.timestamp,
+                  datetime: new Date(d.timestamp).toLocaleString(),
+                  waterLevel_cm: wl,
+                  flowRate_lpm: fr,
+                  rssi_dbm: d.rssi_dbm != null ? d.rssi_dbm : ''
+                });
+              }
+            });
+
+            pending--;
+            if (pending === 0) {
+              allRows.sort((a, b) => a.timestamp - b.timestamp);
+              const header = 'Station,Node,Timestamp,DateTime,Water Level (cm),Flow Rate (L/min),RSSI (dBm)';
+              const csv = header + '\n' + allRows.map(r =>
+                `${r.station},${r.node},${r.timestamp},${r.datetime},${r.waterLevel_cm},${r.flowRate_lpm},${r.rssi_dbm}`
+              ).join('\n');
+
+              const blob = new Blob([csv], { type: 'text/csv' });
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement('a');
+              a.href = url;
+              a.download = `river-data-${new Date().toISOString().slice(0,10)}.csv`;
+              a.click();
+              URL.revokeObjectURL(url);
+            }
+          });
+      });
+    }
+
     function timeAgo(epochSeconds) {
       const diff = Math.floor(Date.now() / 1000) - epochSeconds;
       if (diff < 0)     return 'just now';

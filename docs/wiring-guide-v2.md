@@ -1,5 +1,8 @@
 # Wiring Guide -- Firmware V2 (A0120AG + C25B + ESP8266)
 
+> **Firmware location:** `firmware/v2/station-01/`, `firmware/v2/station-02/`, `firmware/v2/station-03/`
+> **Flashing instructions:** See `docs/GUIDE.md` Section 6.
+
 ## Components
 
 | Component | Description |
