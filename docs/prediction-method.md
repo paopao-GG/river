@@ -2,7 +2,7 @@
 
 ## Overview
 
-The BUP CPE River Monitor webapp includes a **Water Level Prediction** chart that forecasts future water levels based on recent sensor readings. It uses **linear regression** (least-squares method) to fit a trend line through historical data and project it forward in time.
+The BUP CPE River Monitor webapp includes a **Water Level Prediction** chart that forecasts future water levels for **Centro Station (Node 1)** based on recent sensor readings. It uses **multiple linear regression** with both water level and flow rate data to produce more accurate predictions than a simple trend line.
 
 ---
 
@@ -10,101 +10,91 @@ The BUP CPE River Monitor webapp includes a **Water Level Prediction** chart tha
 
 ### 1. Fetch Historical Data
 
-The system queries Firebase RTDB for all water level readings from the selected node within the chosen history window (1 hour, 6 hours, or 24 hours). Each reading is a pair of:
+The system queries Firebase RTDB for all readings from Centro Station within the chosen history window (1 hour, 6 hours, or 24 hours). Each reading includes:
 - **timestamp** (when the reading was taken)
-- **waterLevel_cm** (distance from sensor to water surface in centimeters)
+- **waterLevel_cm** (raw ultrasonic distance, converted to actual water level)
+- **flowRate_lpm** (water flow rate in liters per minute)
 
-### 2. Normalize Timestamps
+### 2. Compute Features
 
-Raw timestamps are large numbers (Unix milliseconds, e.g., `1741622955000`). Using them directly in regression would cause floating-point precision issues.
+For each consecutive pair of readings, the system computes 4 features:
 
-To fix this, all timestamps are normalized to **minutes from the first data point**:
+| Feature | Formula | Purpose |
+|---------|---------|---------|
+| **Time** | `(timestamp - t0) / 60000` | Overall trend (normalized to minutes) |
+| **Level change rate** | `(wl[i] - wl[i-1]) / dt` | How fast water is rising/falling (cm/min) |
+| **Flow rate** | `flowRate_lpm[i]` | Current flow — leading indicator of level changes |
+| **Flow change rate** | `(fr[i] - fr[i-1]) / dt` | Acceleration/deceleration of flow (L/min/min) |
+
+**Why flow rate matters:**
+- Rising flow + stable level = level is **about to rise**
+- Falling flow + high level = level is **about to drop**
+- Flow rate reacts faster than water level to upstream changes
+
+### 3. Multiple Linear Regression (Normal Equation)
+
+The model fits:
 
 ```
-normalized_time = (timestamp - first_timestamp) / 60000
+water_level = b0 + b1 * time + b2 * level_change_rate + b3 * flow_rate + b4 * flow_change_rate
 ```
 
-For example, if the first reading is at `1741622955000` and another is at `1741623555000` (10 minutes later), the normalized values are `0` and `10`.
-
-### 3. Linear Regression (Least Squares)
-
-Linear regression finds the straight line `y = mx + b` that best fits the data, where:
-- `y` = predicted water level (cm)
-- `x` = time (normalized minutes)
-- `m` = **slope** (rate of change in cm per minute)
-- `b` = **intercept** (baseline water level)
-
-The slope and intercept are calculated using the **ordinary least squares** formulas:
+The coefficients `[b0, b1, b2, b3, b4]` are solved using the **normal equation**:
 
 ```
-        n * Σ(xi * yi) - Σxi * Σyi
-m = ─────────────────────────────────
-        n * Σ(xi²) - (Σxi)²
-
-        Σyi - m * Σxi
-b = ─────────────────────
-              n
+B = (X^T X)^-1 X^T Y
 ```
 
 Where:
-- `n` = number of data points
-- `xi` = normalized timestamp of each reading
-- `yi` = water level of each reading
-- `Σ` = sum over all data points
+- `X` = matrix of features (with intercept column of 1s)
+- `Y` = vector of water level values
+- `B` = coefficient vector
 
-**Interpretation of slope:**
-- `m > 0` → Water level is **rising** (positive trend)
-- `m < 0` → Water level is **falling** (negative trend)
-- `m ≈ 0` → Water level is **stable**
+The system solves this via **Gaussian elimination with partial pivoting** for numerical stability.
+
+**Fallback:** If there aren't enough data points for multivariate regression (need at least 6), the system falls back to simple time-based linear regression.
 
 ### 4. Generate Forecast Points
 
-Using the regression equation, the system calculates predicted water levels from the last actual reading to the end of the forecast window (30 min, 1 hour, 3 hours, or 6 hours ahead):
+Using the regression model, the system projects water levels from the last reading to the forecast horizon (30 min, 1 hour, 3 hours, or 6 hours).
+
+For multivariate predictions, the rates (level change, flow change) **decay exponentially** over the forecast period:
 
 ```
-predicted_level = slope * time_in_minutes + intercept
+decayed_rate = last_rate × e^(-2 × progress)
 ```
 
-Predicted values are clamped to a minimum of 0 (water level cannot be negative).
+Where `progress` goes from 0 (start of forecast) to 1 (end). This prevents runaway predictions — the model assumes rates gradually return toward zero rather than continuing indefinitely.
+
+Predicted values are clamped to **0–200 cm** (max water level = 2 meters).
 
 ### 5. Confidence Band (Uncertainty)
 
-The prediction includes a shaded **confidence band** that shows the range of likely values. This band grows wider the further into the future the prediction extends, reflecting increasing uncertainty.
+The prediction includes a shaded **95% confidence band** that widens over time.
 
-#### Standard Error of Residuals
-
-First, the system calculates how well the regression line fits the historical data:
+#### Standard Error
 
 ```
            Σ(yi - ŷi)²
 SE = √ ─────────────────
-             n - 2
+           n - k - 1
 ```
 
-Where `ŷi` is the predicted value for each historical point. A larger SE means the historical data has more scatter around the trend line.
+Where `k` is the number of features (4 for multivariate, 1 for fallback).
 
-#### Uncertainty Formula
-
-At each forecast point, the uncertainty is:
+#### Uncertainty at each forecast point
 
 ```
 uncertainty = SE × 1.96 × (1 + distance_from_last_reading / (n × 0.5))
 ```
 
-Where:
-- `1.96` corresponds to a **95% confidence interval** (from the standard normal distribution)
-- `distance_from_last_reading` = minutes beyond the last actual data point
-- `n` = number of historical data points (more data → tighter band)
-
-The upper and lower bounds of the band are:
-```
-upper = predicted + uncertainty
-lower = predicted - uncertainty
-```
+- `1.96` = 95% confidence interval (standard normal)
+- The band grows wider with distance from the last actual reading
+- More historical data points = tighter band
 
 ### 6. Alert Threshold Line
 
-If the node has a configured alert threshold (set in Firebase under `devices/{nodeId}/config/alertThreshold_cm`), a horizontal red dashed line is drawn across the chart. This makes it visually clear whether the predicted water level is expected to cross the danger threshold.
+If the node has a configured `alertThreshold_cm` in Firebase, a horizontal red dashed line is drawn. This shows whether the predicted water level is expected to cross the danger threshold.
 
 ---
 
@@ -113,7 +103,8 @@ If the node has a configured alert threshold (set in Firebase under `devices/{no
 | Element | Color | Description |
 |---------|-------|-------------|
 | Solid blue line | `#4fc3f7` | Actual historical water level readings |
-| Dashed orange line | `#ff7043` | Predicted future water level (trend) |
+| Green dashed line | `#81c784` | Flow rate (L/min) on right axis |
+| Dashed orange line | `#ff7043` | Predicted future water level |
 | Shaded orange area | `#ff704322` | 95% confidence band (likely range) |
 | Dashed red line | `#e74c3c` | Alert threshold (if configured) |
 
@@ -123,50 +114,50 @@ If the node has a configured alert threshold (set in Firebase under `devices/{no
 
 | Control | Options | Effect |
 |---------|---------|--------|
-| **Node** | Node 01, 02, 03 | Selects which sensor node to analyze |
-| **History** | 1H, 6H, 24H | How much past data to use for the regression |
-| **Forecast** | 30min, 1hr, 3hr, 6hr | How far ahead to project the trend |
+| **Node** | Centro Station (Node 1) | Fixed to Centro Station |
+| **History** | 1H, 6H, 24H | How much past data to use for regression |
+| **Forecast** | 30min, 1hr, 3hr, 6hr | How far ahead to project |
 
 **Tips:**
 - Use a **longer history** for more stable predictions (less affected by short-term noise)
 - Use a **shorter history** to capture rapid recent changes (e.g., during a storm)
 - **Longer forecasts** will have wider confidence bands (more uncertainty)
+- Watch the **flow rate line** — if flow is rising sharply, expect water level to follow
 
 ---
 
 ## Limitations
 
-1. **Linear model only** -- The prediction assumes water level changes at a constant rate. It cannot predict sudden surges, exponential rises, or cyclical patterns.
+1. **Linear relationships assumed** -- The model assumes water level changes linearly with the features. It cannot capture non-linear dynamics like exponential flood surges.
 
-2. **Extrapolation risk** -- The further into the future the forecast extends, the less reliable it becomes. A 6-hour forecast based on 1 hour of data is speculative.
+2. **Extrapolation risk** -- The further into the future, the less reliable. The exponential decay on rates helps, but long forecasts remain speculative.
 
-3. **Minimum 2 data points** -- The regression requires at least 2 readings. If only 1 or 0 readings exist in the history window, only actual data is shown (no prediction).
+3. **Minimum data points** -- Multivariate regression needs at least 6 readings. With fewer, the system falls back to simple linear regression (time only). With fewer than 2, no prediction is shown.
 
-4. **Garbage in, garbage out** -- If the ultrasonic sensor produces erratic readings (e.g., obstructions, sensor malfunction), the prediction will reflect that noise.
+4. **Sensor quality dependent** -- If the ultrasonic sensor produces erratic readings or the flow sensor is clogged, the prediction will reflect that noise.
 
-5. **No external factors** -- The model does not account for weather forecasts, upstream dam releases, or other external variables that affect river levels.
+5. **No external factors** -- The model does not account for weather forecasts, upstream dam releases, rainfall, or other external variables.
+
+6. **Single station** -- Currently predicts Centro Station only. Cross-station lag correlation (using upstream data to predict downstream) is not yet implemented.
 
 ---
 
 ## Example
 
-Suppose the last 6 hours of data for Node 01 show:
+Suppose the last hour of data for Centro Station shows:
 
-| Time | Water Level |
-|------|-------------|
-| 10:00 | 45.2 cm |
-| 10:10 | 45.8 cm |
-| 10:20 | 46.3 cm |
-| 10:30 | 46.9 cm |
-| 10:40 | 47.5 cm |
-| 10:50 | 48.0 cm |
+| Time | Water Level | Flow Rate |
+|------|-------------|-----------|
+| 10:00 | 45.2 cm | 12.0 L/min |
+| 10:10 | 45.8 cm | 14.5 L/min |
+| 10:20 | 46.3 cm | 18.0 L/min |
+| 10:30 | 46.9 cm | 20.2 L/min |
+| 10:40 | 47.5 cm | 19.8 L/min |
+| 10:50 | 48.0 cm | 19.5 L/min |
 
-The regression finds:
-- **Slope**: ~0.56 cm/min (water rising at 0.56 cm every minute)
-- **Intercept**: ~45.2 cm
+The regression detects:
+- **Positive time trend** (level rising ~0.56 cm/min)
+- **High flow rate** (sustained ~19 L/min)
+- **Flow rate stabilizing** (change rate near zero)
 
-1-hour forecast (to 11:50):
-- Predicted at 11:50: `0.56 × 110 + 45.2 = 106.8 cm`
-- Confidence band widens from ±2 cm at 10:50 to ±15 cm at 11:50
-
-If the alert threshold is 100 cm, the red dashed line at 100 cm would show that the predicted trend crosses it around 11:38, giving an early warning.
+The prediction would show continued rise but at a gradually slowing rate (since the flow rate is no longer increasing), converging toward a plateau — more realistic than a simple straight line that would predict indefinite rise.

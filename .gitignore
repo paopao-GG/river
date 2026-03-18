@@ -11,3 +11,4 @@
 # firmware/river-monitor/config.h
 
 /firmware
+.vercel

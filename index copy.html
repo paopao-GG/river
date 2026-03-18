@@ -376,9 +376,8 @@
       </div>
       <div class="prediction-legend">
         <span><span class="legend-line" style="background:#4fc3f7"></span> Actual</span>
-        <span><span class="legend-line dashed" style="color:#ff7043"></span> Predicted (level + flow)</span>
+        <span><span class="legend-line dashed" style="color:#ff7043"></span> Predicted (trend)</span>
         <span><span class="legend-line" style="background:#ff704333; height:12px; width:22px; border-radius:2px;"></span> Confidence band</span>
-        <span><span class="legend-line" style="background:#81c784"></span> Flow Rate</span>
       </div>
       <div class="chart-wrapper">
         <canvas id="pred-chart"></canvas>
@@ -820,63 +819,33 @@
     }
 
     // Linear regression: returns { slope, intercept } for (x, y) pairs
-    // Multiple linear regression: y = b0 + b1*x1 + b2*x2 + ... + bn*xn
-    // Uses normal equation: B = (X^T X)^-1 X^T Y
-    function multipleRegression(data) {
-      // data = [{ features: [x1, x2, ...], y: number }]
-      const n = data.length;
-      const k = data[0].features.length; // number of features
-      if (n < k + 2) return null;
+    function linearRegression(points) {
+      const n = points.length;
+      if (n < 2) return null;
 
-      // Build X matrix (with intercept column) and Y vector
-      // X = [[1, x1, x2, ...], ...]
-      const X = data.map(d => [1, ...d.features]);
-      const Y = data.map(d => d.y);
-
-      // X^T * X
-      const cols = k + 1;
-      const XtX = Array.from({ length: cols }, () => new Array(cols).fill(0));
-      const XtY = new Array(cols).fill(0);
-
-      for (let i = 0; i < n; i++) {
-        for (let j = 0; j < cols; j++) {
-          XtY[j] += X[i][j] * Y[i];
-          for (let m = 0; m < cols; m++) {
-            XtX[j][m] += X[i][j] * X[i][m];
-          }
-        }
+      let sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0;
+      for (const p of points) {
+        sumX  += p.x;
+        sumY  += p.y;
+        sumXY += p.x * p.y;
+        sumX2 += p.x * p.x;
       }
 
-      // Solve via Gaussian elimination
-      const aug = XtX.map((row, i) => [...row, XtY[i]]);
-      for (let col = 0; col < cols; col++) {
-        let maxRow = col;
-        for (let row = col + 1; row < cols; row++) {
-          if (Math.abs(aug[row][col]) > Math.abs(aug[maxRow][col])) maxRow = row;
-        }
-        [aug[col], aug[maxRow]] = [aug[maxRow], aug[col]];
-        if (Math.abs(aug[col][col]) < 1e-12) return null;
-        const pivot = aug[col][col];
-        for (let j = col; j <= cols; j++) aug[col][j] /= pivot;
-        for (let row = 0; row < cols; row++) {
-          if (row === col) continue;
-          const factor = aug[row][col];
-          for (let j = col; j <= cols; j++) aug[row][j] -= factor * aug[col][j];
-        }
-      }
+      const denom = n * sumX2 - sumX * sumX;
+      if (Math.abs(denom) < 1e-10) return null;
 
-      const coeffs = aug.map(row => row[cols]); // [b0, b1, b2, ...]
+      const slope     = (n * sumXY - sumX * sumY) / denom;
+      const intercept = (sumY - slope * sumX) / n;
 
-      // Standard error
+      // Standard error for confidence band
       let ssRes = 0;
-      for (let i = 0; i < n; i++) {
-        let predicted = 0;
-        for (let j = 0; j < cols; j++) predicted += coeffs[j] * X[i][j];
-        ssRes += (Y[i] - predicted) * (Y[i] - predicted);
+      for (const p of points) {
+        const predicted = slope * p.x + intercept;
+        ssRes += (p.y - predicted) * (p.y - predicted);
       }
-      const stdErr = Math.sqrt(ssRes / Math.max(n - cols, 1));
+      const stdErr = Math.sqrt(ssRes / Math.max(n - 2, 1));
 
-      return { coeffs, stdErr };
+      return { slope, intercept, stdErr };
     }
 
     function reloadPrediction() {
@@ -892,116 +861,82 @@
         .orderByChild('timestamp')
         .startAt(startMs)
         .once('value', snap => {
-          const rawData = [];
+          const actual = [];
           snap.forEach(child => {
             const d = child.val();
             if (d.timestamp && d.waterLevel_cm != null) {
               const wl = distanceToWaterLevel(d.waterLevel_cm, nodeId);
-              const fr = d.flowRate_lpm != null ? d.flowRate_lpm : 0;
-              rawData.push({ t: d.timestamp, wl, fr });
+              actual.push({ x: d.timestamp, y: wl });
             }
           });
 
-          const actual    = rawData.map(d => ({ x: d.t, y: d.wl }));
-          const flowData  = rawData.map(d => ({ x: d.t, y: d.fr }));
-
-          if (rawData.length < 4) {
-            predChart.data.datasets = [
-              { label: 'Actual Water Level', data: actual, borderColor: '#4fc3f7', backgroundColor: '#4fc3f722', borderWidth: 2, pointRadius: 3, tension: 0.3, fill: false },
-              { label: 'Flow Rate (L/min)', data: flowData, borderColor: '#81c784', backgroundColor: '#81c78422', borderWidth: 1.5, pointRadius: 0, tension: 0.3, fill: false, yAxisID: 'yFlow', borderDash: [3, 3] }
-            ];
-            predChart.options.scales.yFlow = { display: true, position: 'right', title: { display: true, text: 'Flow (L/min)', color: '#81c784' }, grid: { display: false }, ticks: { color: '#81c784' } };
+          // Need at least 2 points for regression
+          if (actual.length < 2) {
+            predChart.data.datasets = [{
+              label: 'Actual Water Level',
+              data: actual,
+              borderColor: '#4fc3f7',
+              backgroundColor: '#4fc3f722',
+              borderWidth: 2,
+              pointRadius: 3,
+              tension: 0.3,
+              fill: false
+            }];
             predChart.update();
             return;
           }
 
-          // Compute rate-of-change features
-          const t0 = rawData[0].t;
-          const regData = [];
-          for (let i = 1; i < rawData.length; i++) {
-            const dt = (rawData[i].t - rawData[i - 1].t) / 60000; // minutes
-            if (dt <= 0) continue;
-            const tNorm      = (rawData[i].t - t0) / 60000;
-            const levelRate  = (rawData[i].wl - rawData[i - 1].wl) / dt;  // cm/min
-            const flowRate   = rawData[i].fr;
-            const flowChange = (rawData[i].fr - rawData[i - 1].fr) / dt;  // L/min/min
+          // Normalize timestamps to minutes for numerical stability
+          const t0 = actual[0].x;
+          const normalized = actual.map(p => ({
+            x: (p.x - t0) / 60000,  // minutes from first point
+            y: p.y
+          }));
 
-            // Features: [time, level_change_rate, flow_rate, flow_change_rate]
-            regData.push({
-              features: [tNorm, levelRate, flowRate, flowChange],
-              y: rawData[i].wl
-            });
-          }
-
-          const reg = regData.length >= 6 ? multipleRegression(regData) : null;
-
-          // Fallback: simple time-based regression if multivariate fails
-          let fallbackReg = null;
+          const reg = linearRegression(normalized);
           if (!reg) {
-            const normalized = rawData.map(d => ({ features: [(d.t - t0) / 60000], y: d.wl }));
-            fallbackReg = multipleRegression(normalized);
-          }
-
-          const model = reg || fallbackReg;
-          if (!model) {
-            predChart.data.datasets = [
-              { label: 'Actual Water Level', data: actual, borderColor: '#4fc3f7', backgroundColor: '#4fc3f722', borderWidth: 2, pointRadius: 3, tension: 0.3, fill: false }
-            ];
+            predChart.data.datasets = [{
+              label: 'Actual Water Level',
+              data: actual,
+              borderColor: '#4fc3f7',
+              backgroundColor: '#4fc3f722',
+              borderWidth: 2,
+              pointRadius: 3,
+              tension: 0.3,
+              fill: false
+            }];
             predChart.update();
             return;
           }
 
-          // Generate prediction points
-          const lastRaw    = rawData[rawData.length - 1];
+          // Generate prediction points (from last actual to +forecastMin)
+          const lastActual = actual[actual.length - 1];
           const forecastMs = forecastMin * 60 * 1000;
-          const predStep   = Math.max(forecastMin / 30, 1) * 60000;
+          const predStep   = Math.max(forecastMin / 30, 1) * 60000; // step size in ms
           const predPoints = [];
           const upperBand  = [];
           const lowerBand  = [];
-          const confidence = 1.96;
 
-          // For multivariate: extrapolate using last known rates
-          const lastDt = rawData.length >= 2 ? (rawData[rawData.length - 1].t - rawData[rawData.length - 2].t) / 60000 : 1;
-          const lastLevelRate = rawData.length >= 2 ? (rawData[rawData.length - 1].wl - rawData[rawData.length - 2].wl) / Math.max(lastDt, 0.1) : 0;
-          const lastFlowRate  = lastRaw.fr;
-          const lastFlowChange = rawData.length >= 2 ? (rawData[rawData.length - 1].fr - rawData[rawData.length - 2].fr) / Math.max(lastDt, 0.1) : 0;
+          // Confidence grows with distance from data
+          const confidence = 1.96; // ~95% interval
 
-          let prevWl = lastRaw.wl;
-          let prevFr = lastRaw.fr;
-
-          for (let t = lastRaw.t; t <= lastRaw.t + forecastMs; t += predStep) {
+          for (let t = lastActual.x; t <= lastActual.x + forecastMs; t += predStep) {
             const tNorm = (t - t0) / 60000;
-            const stepMin = predStep / 60000;
-            let yPred;
+            const yPred = reg.slope * tNorm + reg.intercept;
+            const distFromEnd = (t - lastActual.x) / 60000; // minutes beyond last reading
+            const uncertainty = reg.stdErr * confidence * (1 + distFromEnd / (normalized.length * 0.5));
 
-            if (reg) {
-              // Use multivariate model with decaying rates toward zero
-              const progress = (t - lastRaw.t) / forecastMs; // 0 to 1
-              const decay = Math.exp(-2 * progress); // rates decay over time
-              const curLevelRate = lastLevelRate * decay;
-              const curFlowRate  = prevFr;
-              const curFlowChange = lastFlowChange * decay;
-              yPred = model.coeffs[0] + model.coeffs[1] * tNorm + model.coeffs[2] * curLevelRate + model.coeffs[3] * curFlowRate + model.coeffs[4] * curFlowChange;
-              prevFr = prevFr + curFlowChange * stepMin;
-            } else {
-              yPred = model.coeffs[0] + model.coeffs[1] * tNorm;
-            }
-
-            yPred = Math.max(0, Math.min(MAX_WATER_LEVEL_CM, yPred));
-            const distFromEnd = (t - lastRaw.t) / 60000;
-            const uncertainty = model.stdErr * confidence * (1 + distFromEnd / (rawData.length * 0.5));
-
-            predPoints.push({ x: t, y: yPred });
-            upperBand.push({ x: t, y: Math.min(MAX_WATER_LEVEL_CM, Math.max(0, yPred + uncertainty)) });
+            predPoints.push({ x: t, y: Math.max(0, yPred) });
+            upperBand.push({ x: t, y: Math.max(0, yPred + uncertainty) });
             lowerBand.push({ x: t, y: Math.max(0, yPred - uncertainty) });
-            prevWl = yPred;
           }
 
+          // Alert threshold line (if configured)
           const datasets = [];
           const cfg = nodeConfigs[nodeId];
           const threshold = cfg ? cfg.alertThreshold_cm : null;
 
-          // Actual water level
+          // Actual data
           datasets.push({
             label: 'Actual Water Level',
             data: actual,
@@ -1013,20 +948,6 @@
             fill: false
           });
 
-          // Flow rate on secondary axis
-          datasets.push({
-            label: 'Flow Rate (L/min)',
-            data: flowData,
-            borderColor: '#81c784',
-            backgroundColor: '#81c78422',
-            borderWidth: 1.5,
-            pointRadius: 0,
-            tension: 0.3,
-            fill: false,
-            yAxisID: 'yFlow',
-            borderDash: [3, 3]
-          });
-
           // Prediction line
           datasets.push({
             label: 'Predicted',
@@ -1035,7 +956,7 @@
             borderWidth: 2,
             borderDash: [6, 4],
             pointRadius: 0,
-            tension: 0.3,
+            tension: 0,
             fill: false
           });
 
@@ -1059,13 +980,16 @@
             fill: '-1'
           });
 
-          // Alert threshold
+          // Alert threshold horizontal line
           if (threshold != null) {
             const chartStart = actual[0].x;
-            const chartEnd   = lastRaw.t + forecastMs;
+            const chartEnd   = lastActual.x + forecastMs;
             datasets.push({
               label: 'Alert Threshold',
-              data: [{ x: chartStart, y: threshold }, { x: chartEnd, y: threshold }],
+              data: [
+                { x: chartStart, y: threshold },
+                { x: chartEnd,   y: threshold }
+              ],
               borderColor: '#e74c3c',
               borderWidth: 1.5,
               borderDash: [4, 4],
@@ -1073,15 +997,6 @@
               fill: false
             });
           }
-
-          // Add flow rate axis
-          predChart.options.scales.yFlow = {
-            display: true,
-            position: 'right',
-            title: { display: true, text: 'Flow (L/min)', color: '#81c784' },
-            grid: { display: false },
-            ticks: { color: '#81c784' }
-          };
 
           predChart.data.datasets = datasets;
           predChart.update();
