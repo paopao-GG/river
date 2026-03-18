@@ -1,11 +1,13 @@
 # Firebase
-.firebaserc
-firebase-debug.log
-webapp/.firebase/
+##.firebaserc
+#firebase-debug.log
+#webapp/.firebase/
 
 # Logs
-*.log
+#*.log
 
 # Credentials -- NEVER commit these
 # If you add a config.h with real WiFi/Firebase credentials, exclude it here:
 # firmware/river-monitor/config.h
+
+/firmware

@@ -1,7 +1,14 @@
 {
   "rules": {
     ".read": true,
-    ".write": true
+    ".write": true,
+    "devices": {
+      "$nodeId": {
+        "readings": {
+          ".indexOn": ["timestamp"]
+        }
+      }
+    }
   }
 }
 

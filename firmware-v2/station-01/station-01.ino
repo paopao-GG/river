@@ -1,15 +1,16 @@
 //========================================================================
-// BUP CPE River Monitoring System
-// Node Firmware -- ESP8266 (NodeMCU 1.0) | node-01 | Upstream Station
+// CPE River Monitoring System
+// Station Firmware v2 -- ESP8266 (NodeMCU 1.0) | station-01 | Upstream
 //
 // Sensors:
-//   AJ-SR04M Waterproof Ultrasonic  -> Water level (cm)
-//   YF-DN50 Hall-effect Flow Sensor -> Flow rate (L/min)
+//   A0120AG RS485 Ultrasonic (via C25B TTL-RS485) -> Water level (cm)
+//   YF-DN50 Hall-effect Flow Sensor               -> Flow rate (L/min)
 //
 // Cycle: Wake -> Read sensors -> Connect WiFi -> Push to Firebase -> Sleep 5min
 //
 // Libraries (install via Arduino Library Manager):
 //   - Firebase ESP8266 Client  by mobizt
+//   - SoftwareSerial            (built-in)
 //
 // Board settings:
 //   Board:      NodeMCU 1.0 (ESP-12E Module)
@@ -21,55 +22,63 @@
 #include <ESP8266WiFi.h>
 #include <FirebaseESP8266.h>
 #include <LittleFS.h>
+#include <SoftwareSerial.h>
 
 //========================================================================
-// !! NODE CONFIGURATION -- CHANGE THESE BEFORE FLASHING !!
+// !! STATION CONFIGURATION -- CHANGE THESE BEFORE FLASHING !!
 //========================================================================
 
-// Change this for each of the 3 devices: "node-01", "node-02", "node-03"
-#define NODE_ID  "station-01"  // Deployment: Upstream Station
+#define STATION_ID  "station-01"  // Deployment: Upstream
 
 // TODO: REPLACE with your WiFi credentials
 const char* WIFI_SSID     = "TP-Link_SATUITO";
 const char* WIFI_PASSWORD = "paopaopao122002";
 
-// TODO: REPLACE with your Firebase project credentials
-// Get from: Firebase Console > Project Settings > General > Your apps > Web app
+// Firebase project credentials
 #define FIREBASE_API_KEY  "AIzaSyC0rNq9LGrIvzg20-7kAgfWnf1TqDt8eOM"
 #define FIREBASE_DB_URL   "river-d1bc6-default-rtdb.asia-southeast1.firebasedatabase.app"
-// (no "https://" prefix)
 
 //========================================================================
 // PIN DEFINITIONS
 //========================================================================
 
-#define TRIG_PIN   5    // GPIO5  (D1) -- AJ-SR04M trigger
-#define ECHO_PIN   12   // GPIO12 (D6) -- AJ-SR04M echo
-#define FLOW_PIN   4    // GPIO4  (D2) -- YF-DN50 signal (+ 10k pullup to 3.3V)
+// A0120AG RS485 via C25B TTL-RS485 converter
+#define RS485_RX_PIN  12   // GPIO12 (D6) <- C25B TXD
+#define RS485_TX_PIN  13   // GPIO13 (D7) -> C25B RXD
+
+// C25B direction control (DE + RE tied together)
+#define RS485_DIR_PIN  14  // GPIO14 (D5) -- HIGH=transmit, LOW=receive
+
+// YF-DN50 flow sensor
+#define FLOW_PIN       4   // GPIO4  (D2) -- YF-DN50 signal (+ 10k pullup to 3.3V)
 
 //========================================================================
 // SENSOR CONSTANTS
 //========================================================================
 
-#define ULTRASONIC_SAMPLES     7        // must be odd for clean median
-#define FLOW_WINDOW_MS         1000     // pulse counting window (1 sec for testing, use 5000 for deployment)
+// A0120AG Modbus RTU settings
+#define MODBUS_ADDR        0x01   // Default slave address (check your sensor)
+#define MODBUS_BAUD        9600   // Default baud rate
+#define MODBUS_TIMEOUT_MS  500    // Response timeout
+#define ULTRASONIC_SAMPLES 5      // Number of readings to average
+
+// YF-DN50 flow sensor
+#define FLOW_WINDOW_MS         1000     // 1s for testing, 5000 for deployment
 #define FLOW_CALIBRATION_HZ    0.2f     // freq_Hz = 0.2 * flow_Lpm
 
 //========================================================================
 // TIMING
 //========================================================================
 
-// Deep sleep duration: 10 seconds (TESTING) -- change to 300000000ULL for deployment
-#define SLEEP_DURATION_US  10000000ULL
-
-#define WIFI_TIMEOUT_MS    15000   // give up on WiFi after 15 seconds
+#define SLEEP_DURATION_US  10000000ULL   // 10s testing -- 300000000ULL for deployment
+#define WIFI_TIMEOUT_MS    15000
 
 //========================================================================
 // OFFLINE BUFFER
 //========================================================================
 
 #define BUFFER_FILE  "/buffer.csv"
-#define MAX_BUFFERED 100   // max lines stored before dropping oldest
+#define MAX_BUFFERED 100
 
 //========================================================================
 // GLOBALS
@@ -79,11 +88,12 @@ FirebaseData   fbdo;
 FirebaseAuth   auth;
 FirebaseConfig fbConfig;
 
+SoftwareSerial rs485Serial(RS485_RX_PIN, RS485_TX_PIN);
+
 volatile unsigned long pulseCount = 0;
 
 //========================================================================
 // INTERRUPT SERVICE ROUTINE
-// Must be in RAM (ICACHE_RAM_ATTR) on ESP8266
 //========================================================================
 
 ICACHE_RAM_ATTR void flowPulseISR() {
@@ -91,24 +101,25 @@ ICACHE_RAM_ATTR void flowPulseISR() {
 }
 
 //========================================================================
-// SETUP -- runs once per wake cycle (deep sleep resets to here)
+// SETUP
 //========================================================================
 
 void setup() {
   Serial.begin(115200);
-  delay(500);  // longer delay for stable serial after deep sleep wake
+  delay(500);
   Serial.println(F("\n========================================"));
-  Serial.println(F("  River Monitor Wake Cycle"));
-  Serial.print(F("  Node: "));
-  Serial.println(F(NODE_ID));
+  Serial.println(F("  CPE River Monitor Wake Cycle"));
+  Serial.print(F("  Station: "));
+  Serial.println(F(STATION_ID));
   Serial.println(F("========================================"));
 
+  // Initialize RS485 serial and direction pin
+  rs485Serial.begin(MODBUS_BAUD);
+  pinMode(RS485_DIR_PIN, OUTPUT);
+  digitalWrite(RS485_DIR_PIN, LOW);  // start in receive mode
+
   // Pin setup
-  pinMode(TRIG_PIN, OUTPUT);
-  pinMode(ECHO_PIN, INPUT);
   pinMode(FLOW_PIN, INPUT_PULLUP);
-  digitalWrite(TRIG_PIN, LOW);
-  delay(50);  // let pins settle after deep sleep wake
 
   // Mount LittleFS for offline buffer
   if (!LittleFS.begin()) {
@@ -132,7 +143,7 @@ void setup() {
   // ---- Send or buffer ----
   if (wifiOk) {
     initFirebase();
-    flushBuffer();   // send any previously offline readings first
+    flushBuffer();
     bool sent = sendToFirebase(waterLevel, flowRate, rssi);
     if (!sent) {
       Serial.println(F("[Firebase] Send failed -- buffering reading"));
@@ -176,10 +187,10 @@ void loop() {
 }
 
 //========================================================================
-// readWaterLevel()
-// 7 trigger/echo samples with median filter.
-// Returns distance in cm from sensor face to water surface.
-// Returns -1.0 if all samples are invalid.
+// readWaterLevel() -- A0120AG via Modbus RTU over RS485
+// Sends read holding register command, parses distance in mm,
+// converts to cm. Takes multiple samples and averages.
+// Returns -1.0 if sensor is unresponsive.
 //========================================================================
 
 float readWaterLevel() {
@@ -187,36 +198,22 @@ float readWaterLevel() {
   int validCount = 0;
 
   for (int i = 0; i < ULTRASONIC_SAMPLES; i++) {
-    digitalWrite(TRIG_PIN, LOW);
-    delayMicroseconds(2);
-    digitalWrite(TRIG_PIN, HIGH);
-    delayMicroseconds(10);
-    digitalWrite(TRIG_PIN, LOW);
-
-    // 30ms timeout = max ~516cm, well beyond 600cm sensor limit
-    long duration = pulseIn(ECHO_PIN, HIGH, 30000);
-
-    if (duration == 0) {
-      samples[i] = -1.0f;  // timeout / no echo
-    } else {
-      float dist = (duration * 0.0343f) / 2.0f;
-      // Reject dead zone (<20cm) and out-of-range (>600cm)
-      samples[i] = (dist >= 20.0f && dist <= 600.0f) ? dist : -1.0f;
-    }
-
-    delay(60);  // AJ-SR04M needs ~60ms between pings
-    yield();    // feed ESP8266 watchdog
+    float dist = readA0120AG_cm();
+    samples[validCount] = dist;
+    if (dist >= 0) validCount++;
+    delay(200);  // give sensor time between readings
+    yield();
   }
 
-  // Bubble sort (7 elements -- tiny, fine here)
-  for (int i = 0; i < ULTRASONIC_SAMPLES - 1; i++) {
-    for (int j = 0; j < ULTRASONIC_SAMPLES - 1 - i; j++) {
-      // Push -1 (invalid) to the front
-      if (samples[j] > samples[j + 1] && samples[j + 1] >= 0) {
-        float tmp = samples[j];
-        samples[j] = samples[j + 1];
-        samples[j + 1] = tmp;
-      } else if (samples[j] < 0 && samples[j + 1] >= 0) {
+  if (validCount == 0) {
+    Serial.println(F("[A0120AG] All samples invalid!"));
+    return -1.0f;
+  }
+
+  // Sort valid samples and take the middle ones
+  for (int i = 0; i < validCount - 1; i++) {
+    for (int j = 0; j < validCount - 1 - i; j++) {
+      if (samples[j] > samples[j + 1]) {
         float tmp = samples[j];
         samples[j] = samples[j + 1];
         samples[j + 1] = tmp;
@@ -224,35 +221,122 @@ float readWaterLevel() {
     }
   }
 
-  // Count valid samples (non -1)
-  for (int i = 0; i < ULTRASONIC_SAMPLES; i++) {
-    if (samples[i] >= 0) validCount++;
-  }
-
-  if (validCount == 0) {
-    Serial.println(F("[Ultrasonic] All samples invalid!"));
-    return -1.0f;
-  }
-
-  // Average the middle 3 valid samples (discard 2 extremes on each side)
-  // Use median if fewer than 5 valid samples
-  int startIdx = ULTRASONIC_SAMPLES - validCount;  // first valid index
+  // Average middle values (trim 1 from each end if enough samples)
+  int skip = (validCount >= 5) ? 1 : 0;
   float sum = 0;
   int used = 0;
-  int skip = (validCount >= 5) ? 2 : (validCount >= 3 ? 1 : 0);
-
-  for (int i = startIdx + skip; i < ULTRASONIC_SAMPLES - skip; i++) {
+  for (int i = skip; i < validCount - skip; i++) {
     sum += samples[i];
     used++;
   }
 
-  return (used > 0) ? (sum / used) : samples[startIdx + validCount / 2];
+  return sum / used;
+}
+
+//========================================================================
+// readA0120AG_cm()
+// Sends Modbus RTU request to A0120AG sensor and reads distance.
+// Register 0x0001 holds distance in mm.
+// Returns distance in cm, or -1.0 on error.
+//========================================================================
+
+float readA0120AG_cm() {
+  // Modbus RTU: Read Holding Register (0x03)
+  // [Addr] [Func] [RegHi] [RegLo] [CountHi] [CountLo] [CRC Lo] [CRC Hi]
+  uint8_t request[] = {
+    MODBUS_ADDR,  // Slave address
+    0x03,         // Function code: Read Holding Registers
+    0x00, 0x01,   // Starting register: 0x0001 (distance)
+    0x00, 0x01    // Number of registers: 1
+  };
+
+  // Calculate CRC16 and append
+  uint16_t crc = modbusCRC16(request, 6);
+  uint8_t frame[8];
+  memcpy(frame, request, 6);
+  frame[6] = crc & 0xFF;        // CRC low byte
+  frame[7] = (crc >> 8) & 0xFF; // CRC high byte
+
+  // Clear any stale data in RX buffer
+  while (rs485Serial.available()) rs485Serial.read();
+
+  // Switch to transmit mode, send request, then back to receive
+  digitalWrite(RS485_DIR_PIN, HIGH);
+  delayMicroseconds(500);          // let DE settle
+  rs485Serial.write(frame, 8);
+  rs485Serial.flush();
+  delay(10);                       // critical: wait after flush before switching
+  digitalWrite(RS485_DIR_PIN, LOW);
+  delayMicroseconds(500);          // let RE settle
+
+  // Wait for response (7 bytes expected: addr + func + byteCount + 2 data + 2 CRC)
+  unsigned long start = millis();
+  while (rs485Serial.available() < 7) {
+    if (millis() - start > MODBUS_TIMEOUT_MS) {
+      Serial.println(F("[A0120AG] Modbus timeout"));
+      return -1.0f;
+    }
+    yield();
+  }
+
+  // Read response
+  uint8_t response[7];
+  for (int i = 0; i < 7; i++) {
+    response[i] = rs485Serial.read();
+  }
+
+  // Validate response
+  if (response[0] != MODBUS_ADDR || response[1] != 0x03 || response[2] != 0x02) {
+    Serial.printf("[A0120AG] Invalid response: %02X %02X %02X\n",
+                  response[0], response[1], response[2]);
+    return -1.0f;
+  }
+
+  // Verify CRC
+  uint16_t respCRC = modbusCRC16(response, 5);
+  uint16_t recvCRC = response[5] | (response[6] << 8);
+  if (respCRC != recvCRC) {
+    Serial.println(F("[A0120AG] CRC mismatch"));
+    return -1.0f;
+  }
+
+  // Distance in mm (big-endian)
+  uint16_t distMM = (response[3] << 8) | response[4];
+  float distCM = distMM / 10.0f;
+
+  // Reject unreasonable values (blind zone ~12cm, max ~2000cm)
+  if (distCM < 12.0f || distCM > 2000.0f) {
+    Serial.printf("[A0120AG] Out of range: %.1f cm\n", distCM);
+    return -1.0f;
+  }
+
+  Serial.printf("[A0120AG] Distance: %u mm (%.1f cm)\n", distMM, distCM);
+  return distCM;
+}
+
+//========================================================================
+// modbusCRC16()
+// Standard Modbus CRC-16 calculation.
+//========================================================================
+
+uint16_t modbusCRC16(const uint8_t* data, uint16_t length) {
+  uint16_t crc = 0xFFFF;
+  for (uint16_t i = 0; i < length; i++) {
+    crc ^= data[i];
+    for (uint8_t j = 0; j < 8; j++) {
+      if (crc & 0x0001) {
+        crc >>= 1;
+        crc ^= 0xA001;
+      } else {
+        crc >>= 1;
+      }
+    }
+  }
+  return crc;
 }
 
 //========================================================================
 // readFlowRate()
-// Counts YF-DN50 pulses over FLOW_WINDOW_MS using hardware interrupt.
-// Returns flow in L/min.
 //========================================================================
 
 float readFlowRate() {
@@ -272,8 +356,6 @@ float readFlowRate() {
 
 //========================================================================
 // connectToWiFi()
-// Adapted from user's NodeMCU RFID project pattern, with 15s timeout.
-// Returns true on success, false on timeout.
 //========================================================================
 
 bool connectToWiFi() {
@@ -300,13 +382,11 @@ bool connectToWiFi() {
 
 //========================================================================
 // initFirebase()
-// No auth -- relies on open RTDB rules (".read": true, ".write": true).
-// Avoids anonymous auth token exchange which can timeout on slow networks.
 //========================================================================
 
 void initFirebase() {
   fbConfig.database_url  = FIREBASE_DB_URL;
-  fbConfig.signer.test_mode = true;  // skip token auth, use open rules
+  fbConfig.signer.test_mode = true;
 
   Firebase.begin(&fbConfig, &auth);
   Firebase.reconnectWiFi(true);
@@ -316,9 +396,6 @@ void initFirebase() {
 
 //========================================================================
 // sendToFirebase()
-// Pushes one reading to /devices/NODE_ID/readings/ using a push key
-// so each entry gets a unique auto-generated ID.
-// Includes Firebase server timestamp for authoritative time.
 //========================================================================
 
 bool sendToFirebase(float waterLevel, float flowRate, int rssi) {
@@ -326,12 +403,10 @@ bool sendToFirebase(float waterLevel, float flowRate, int rssi) {
   json.set("waterLevel_cm", waterLevel);
   json.set("flowRate_lpm",  flowRate);
   json.set("rssi_dbm",      rssi);
-  // Server-side timestamp -- no NTP needed on the device
   json.set("timestamp/.sv", "timestamp");
 
-  String path = String("/devices/") + NODE_ID + "/readings";
+  String path = String("/devices/") + STATION_ID + "/readings";
 
-  // pushJSON creates a unique push-ID key (chronologically sortable)
   if (Firebase.pushJSON(fbdo, path, json)) {
     Serial.printf("[Firebase] Sent OK. Key: %s\n", fbdo.pushName().c_str());
     return true;
@@ -343,13 +418,9 @@ bool sendToFirebase(float waterLevel, float flowRate, int rssi) {
 
 //========================================================================
 // bufferReading()
-// Appends one CSV line to /buffer.csv on LittleFS.
-// Format: waterLevel,flowRate,rssi
-// Limits file to MAX_BUFFERED lines (drops oldest if full).
 //========================================================================
 
 void bufferReading(float waterLevel, float flowRate, int rssi) {
-  // Count existing lines
   int lineCount = 0;
   File f = LittleFS.open(BUFFER_FILE, "r");
   if (f) {
@@ -361,11 +432,10 @@ void bufferReading(float waterLevel, float flowRate, int rssi) {
 
   if (lineCount >= MAX_BUFFERED) {
     Serial.printf("[Buffer] Full (%d lines) -- dropping oldest reading\n", lineCount);
-    // Simple approach: read all, skip first line, rewrite
     File fin = LittleFS.open(BUFFER_FILE, "r");
     File ftmp = LittleFS.open("/buffer_tmp.csv", "w");
     if (fin && ftmp) {
-      fin.readStringUntil('\n');  // skip first (oldest) line
+      fin.readStringUntil('\n');
       while (fin.available()) {
         ftmp.write(fin.read());
       }
@@ -389,8 +459,6 @@ void bufferReading(float waterLevel, float flowRate, int rssi) {
 
 //========================================================================
 // flushBuffer()
-// Reads all CSV lines from LittleFS and sends them to Firebase
-// as a single multi-path update. Deletes the file if all succeed.
 //========================================================================
 
 void flushBuffer() {
@@ -399,7 +467,6 @@ void flushBuffer() {
   File f = LittleFS.open(BUFFER_FILE, "r");
   if (!f) return;
 
-  // Read all lines into a FirebaseJson multi-path update object
   FirebaseJson updateJson;
   int count = 0;
 
@@ -408,21 +475,19 @@ void flushBuffer() {
     line.trim();
     if (line.length() == 0) continue;
 
-    // Parse CSV: waterLevel,flowRate,rssi
     float wl = 0, fr = 0;
     int   rs = 0;
     sscanf(line.c_str(), "%f,%f,%d", &wl, &fr, &rs);
 
-    // Use a sequential key so readings are ordered (millis-based, unique enough for flush)
     String key = String(millis()) + String(count);
 
-    updateJson.set("devices/" + String(NODE_ID) + "/readings/" + key + "/waterLevel_cm", wl);
-    updateJson.set("devices/" + String(NODE_ID) + "/readings/" + key + "/flowRate_lpm",  fr);
-    updateJson.set("devices/" + String(NODE_ID) + "/readings/" + key + "/rssi_dbm",      rs);
-    updateJson.set("devices/" + String(NODE_ID) + "/readings/" + key + "/timestamp/.sv", "timestamp");
+    updateJson.set("devices/" + String(STATION_ID) + "/readings/" + key + "/waterLevel_cm", wl);
+    updateJson.set("devices/" + String(STATION_ID) + "/readings/" + key + "/flowRate_lpm",  fr);
+    updateJson.set("devices/" + String(STATION_ID) + "/readings/" + key + "/rssi_dbm",      rs);
+    updateJson.set("devices/" + String(STATION_ID) + "/readings/" + key + "/timestamp/.sv", "timestamp");
 
     count++;
-    delay(1);  // ensure unique millis() keys
+    delay(1);
   }
   f.close();
 
@@ -433,21 +498,16 @@ void flushBuffer() {
 
   Serial.printf("[Buffer] Flushing %d offline reading(s)...\n", count);
 
-  // Multi-path update -- single Firebase write for all buffered readings
   if (Firebase.updateNode(fbdo, "/", updateJson)) {
     Serial.printf("[Buffer] Flushed OK (%d readings)\n", count);
     LittleFS.remove(BUFFER_FILE);
   } else {
     Serial.printf("[Buffer] Flush failed: %s\n", fbdo.errorReason().c_str());
-    // Leave file intact -- will retry next wake cycle
   }
 }
 
 //========================================================================
 // goToSleep()
-// Shuts down radio and enters deep sleep for SLEEP_DURATION_US.
-// On wake, execution restarts from setup().
-// REQUIRES: GPIO16 (D0) wired to RST pin on the NodeMCU board.
 //========================================================================
 
 void goToSleep() {

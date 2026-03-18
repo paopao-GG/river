@@ -27,16 +27,15 @@
 //========================================================================
 
 // Change this for each of the 3 devices: "node-01", "node-02", "node-03"
-#define NODE_ID  "node-02"  // Deployment: Midstream Station
+#define NODE_ID  "station-02"  // Deployment: Midstream Station
 
 // TODO: REPLACE with your WiFi credentials
-const char* WIFI_SSID     = "YOUR_WIFI_SSID";
-const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
+const char* WIFI_SSID     = "Room 2";
+const char* WIFI_PASSWORD = "RedRoom2";
 
-// TODO: REPLACE with your Firebase project credentials
-// Get from: Firebase Console > Project Settings > General > Your apps > Web app
-#define FIREBASE_API_KEY  "YOUR_FIREBASE_WEB_API_KEY"
-#define FIREBASE_DB_URL   "YOUR_PROJECT_ID-default-rtdb.asia-southeast1.firebasedatabase.app"
+// Firebase project credentials
+#define FIREBASE_API_KEY  "AIzaSyC0rNq9LGrIvzg20-7kAgfWnf1TqDt8eOM"
+#define FIREBASE_DB_URL   "river-d1bc6-default-rtdb.asia-southeast1.firebasedatabase.app"
 // (no "https://" prefix)
 
 //========================================================================

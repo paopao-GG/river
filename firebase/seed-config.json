@@ -1,26 +1,26 @@
 {
   "devices": {
-    "node-01": {
+    "station-01": {
       "config": {
-        "location": "Upstream Station",
+        "location": "Centro Station",
         "lat": 0.0,
         "lng": 0.0,
         "readingInterval_ms": 300000,
         "alertThreshold_cm": 200
       }
     },
-    "node-02": {
+    "station-02": {
       "config": {
-        "location": "Midstream Station",
+        "location": "Napo Station",
         "lat": 0.0,
         "lng": 0.0,
         "readingInterval_ms": 300000,
         "alertThreshold_cm": 200
       }
     },
-    "node-03": {
+    "station-03": {
       "config": {
-        "location": "Downstream Station",
+        "location": "Balinad Station",
         "lat": 0.0,
         "lng": 0.0,
         "readingInterval_ms": 300000,
