@@ -54,7 +54,9 @@
       "Bash(python -c \"import json; p='c:/Users/satui/OneDrive/Desktop/04 COMISSION_PROJECTS/bup-cpe-river/ml/notebooks/02_sarimax.ipynb'; s=open\\(p\\).read\\(\\).replace\\('\\\\\\\\\\\\\\\\\\\\\"','\\\\\"'\\); json.loads\\(s\\); open\\(p,'w'\\).write\\(s\\); print\\('ok'\\)\")",
       "Bash(/c/Users/satui/anaconda3/envs/thesisss/python.exe -c ' *)",
       "Bash(/c/Users/satui/anaconda3/envs/thesisss/python.exe -W ignore -c ' *)",
-      "Bash(grep -Ev 'Warning|warnings.warn|^\\\\s*$')"
+      "Bash(grep -Ev 'Warning|warnings.warn|^\\\\s*$')",
+      "Bash(echo \"exit=$?\")",
+      "Bash(git check-ignore *)"
     ]
   }
 }
