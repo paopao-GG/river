@@ -1,0 +1,18 @@
+{
+  "station-02_water_level": {
+    "lag_min": -52,
+    "abs_corr": 0.08769144835547632
+  },
+  "station-02_flow_rate": {
+    "lag_min": -21,
+    "abs_corr": 0.053638399744992765
+  },
+  "station-03_water_level": {
+    "lag_min": 24,
+    "abs_corr": 0.07954635653239618
+  },
+  "station-03_flow_rate": {
+    "lag_min": 60,
+    "abs_corr": 0.06815755786809137
+  }
+}

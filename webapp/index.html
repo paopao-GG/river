@@ -379,7 +379,9 @@
         <span><span class="legend-line dashed" style="color:#ff7043"></span> Predicted (level + flow)</span>
         <span><span class="legend-line" style="background:#ff704333; height:12px; width:22px; border-radius:2px;"></span> Confidence band</span>
         <span><span class="legend-line" style="background:#81c784"></span> Flow Rate</span>
+        <span><span class="legend-line" style="background:#ab47bc"></span> SARIMAX (server)</span>
       </div>
+      <div id="sarimax-banner" style="display:none; margin:8px 0; padding:10px 14px; border-radius:6px; background:#3b1f1f; border:1px solid #e74c3c; color:#ff8a80; font-size:13px;"></div>
       <div class="chart-wrapper">
         <canvas id="pred-chart"></canvas>
       </div>
@@ -1083,8 +1085,77 @@
             ticks: { color: '#81c784' }
           };
 
-          predChart.data.datasets = datasets;
-          predChart.update();
+          // Overlay server-side SARIMAX forecast (only published for Centro / station-01)
+          db.ref(`devices/${nodeId}/forecast`).once('value', fcSnap => {
+            const fc = fcSnap.val();
+            const banner = document.getElementById('sarimax-banner');
+            const STALE_MS = 10 * 60 * 1000;
+            const setBanner = (mode, msg) => {
+              const styles = {
+                alert: { bg: '#3b1f1f', border: '#e74c3c', color: '#ff8a80' },
+                stale: { bg: '#3a2f1f', border: '#f0a020', color: '#ffd47e' },
+              }[mode];
+              banner.style.background = styles.bg;
+              banner.style.borderColor = styles.border;
+              banner.style.color = styles.color;
+              banner.style.display = 'block';
+              banner.textContent = msg;
+            };
+
+            if (fc && typeof fc === 'object') {
+              const refFc = fc['10'] || fc['30'] || fc['60'];
+              const ageMs = refFc && refFc.generated_at ? Date.now() - new Date(refFc.generated_at).getTime() : Infinity;
+              const isStale = ageMs > STALE_MS;
+
+              if (isStale) {
+                const ageMin = isFinite(ageMs) ? Math.round(ageMs / 60000) : '??';
+                setBanner('stale', `SARIMAX forecast is stale (last update ${ageMin} min ago). Hiding overlay.`);
+              } else {
+                const points = [], upper = [], lower = [];
+                const horizons = ['10', '30', '60'];
+                let crossingMsg = null;
+                horizons.forEach(h => {
+                  const f = fc[h];
+                  if (!f || f.value_cm == null) return;
+                  const t = lastRaw.t + parseInt(h) * 60000;
+                  points.push({ x: t, y: f.value_cm });
+                  upper.push({ x: t, y: f.ci_upper_cm });
+                  lower.push({ x: t, y: f.ci_lower_cm });
+                  if (threshold != null && !crossingMsg && f.ci_upper_cm > threshold) {
+                    crossingMsg = `SARIMAX: forecast 95% CI upper bound (${f.ci_upper_cm.toFixed(1)}cm) exceeds alert threshold (${threshold}cm) within ${h} min.`;
+                  }
+                });
+                if (points.length) {
+                  datasets.push({
+                    label: 'SARIMAX',
+                    data: points,
+                    borderColor: '#ab47bc',
+                    backgroundColor: '#ab47bc',
+                    borderWidth: 2,
+                    pointRadius: 5,
+                    pointStyle: 'rectRot',
+                    showLine: false,
+                    fill: false
+                  });
+                  datasets.push({
+                    label: 'SARIMAX CI', data: upper, borderColor: '#ab47bc66', borderWidth: 1, borderDash: [2, 3], pointRadius: 0, fill: false
+                  });
+                  datasets.push({
+                    label: 'SARIMAX CI', data: lower, borderColor: '#ab47bc66', borderWidth: 1, borderDash: [2, 3], pointRadius: 0, fill: false
+                  });
+                }
+                if (crossingMsg) {
+                  setBanner('alert', crossingMsg);
+                } else {
+                  banner.style.display = 'none';
+                }
+              }
+            } else {
+              banner.style.display = 'none';
+            }
+            predChart.data.datasets = datasets;
+            predChart.update();
+          });
         });
     }
 

@@ -11,4 +11,8 @@
 # firmware/river-monitor/config.h
 
 /firmware
-.vercel
+
+# Vercel: project link, env pulls, and `vercel build` output
+.vercel/
+**/.vercel/
+.vercel/output/

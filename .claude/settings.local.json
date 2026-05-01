@@ -50,7 +50,11 @@
       "Bash(mv GUIDE.md project.md docs/)",
       "Bash(sed -i 's/#define SLEEP_DURATION_US  60000000ULL/#define SLEEP_DURATION_US  30000000ULL   \\\\/\\\\/ 30 seconds/' firmware/v1/node-01/node-01.ino firmware/v1/node-02/node-02.ino firmware/v1/node-03/node-03.ino)",
       "Bash(sed -i 's/#define SLEEP_DURATION_US  10000000ULL.*/#define SLEEP_DURATION_US  30000000ULL   \\\\/\\\\/ 30 seconds/' firmware/v2/station-01/station-01.ino firmware/v2/station-02/station-02.ino firmware/v2/station-03/station-03.ino)",
-      "Bash(grep -rn \"SLEEP_DURATION_US\" firmware/v1/node-*/node-*.ino firmware/v2/station-*/station-*.ino)"
+      "Bash(grep -rn \"SLEEP_DURATION_US\" firmware/v1/node-*/node-*.ino firmware/v2/station-*/station-*.ino)",
+      "Bash(python -c \"import json; p='c:/Users/satui/OneDrive/Desktop/04 COMISSION_PROJECTS/bup-cpe-river/ml/notebooks/02_sarimax.ipynb'; s=open\\(p\\).read\\(\\).replace\\('\\\\\\\\\\\\\\\\\\\\\"','\\\\\"'\\); json.loads\\(s\\); open\\(p,'w'\\).write\\(s\\); print\\('ok'\\)\")",
+      "Bash(/c/Users/satui/anaconda3/envs/thesisss/python.exe -c ' *)",
+      "Bash(/c/Users/satui/anaconda3/envs/thesisss/python.exe -W ignore -c ' *)",
+      "Bash(grep -Ev 'Warning|warnings.warn|^\\\\s*$')"
     ]
   }
 }
