@@ -891,16 +891,14 @@
 
       const startMs = Date.now() - historyHrs * 3600 * 1000;
 
-      const nowMs = Date.now();
       db.ref(`devices/${nodeId}/readings`)
         .orderByChild('timestamp')
         .startAt(startMs)
-        .endAt(nowMs)
         .once('value', snap => {
           const rawData = [];
           snap.forEach(child => {
             const d = child.val();
-            if (d.timestamp && d.timestamp <= nowMs && d.waterLevel_cm != null) {
+            if (d.timestamp && d.waterLevel_cm != null) {
               const wl = distanceToWaterLevel(d.waterLevel_cm, nodeId);
               const fr = d.flowRate_lpm != null ? d.flowRate_lpm : null;
               rawData.push({ t: d.timestamp, wl, fr });
