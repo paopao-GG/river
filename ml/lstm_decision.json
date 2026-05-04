@@ -1,0 +1,42 @@
+{
+  "deploy": false,
+  "sarimax_mae_avg_cm": 0.831,
+  "hybrid_mae_avg_cm": 0.891,
+  "naive_mae_avg_cm": 1.088,
+  "improvement_pct": -7.2,
+  "r2_avg": -0.401,
+  "r2_per_horizon": [
+    -0.22,
+    -0.667,
+    -0.315
+  ],
+  "horizons_min": [
+    10,
+    30,
+    60
+  ],
+  "sarimax_mae_per_horizon": [
+    0.872,
+    0.838,
+    0.783
+  ],
+  "hybrid_mae_per_horizon": [
+    0.875,
+    0.98,
+    0.818
+  ],
+  "naive_mae_per_horizon": [
+    1.147,
+    1.073,
+    1.043
+  ],
+  "sarimax_order": [
+    2,
+    1,
+    2
+  ],
+  "lookback": 30,
+  "n_train": 168,
+  "n_test": 57,
+  "reason": "LSTM did not learn anything beyond noise (R^2 negative). Hybrid worse than SARIMAX-alone. Insufficient data + SARIMAX already at sensor noise floor."
+}

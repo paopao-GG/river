@@ -56,7 +56,10 @@
       "Bash(/c/Users/satui/anaconda3/envs/thesisss/python.exe -W ignore -c ' *)",
       "Bash(grep -Ev 'Warning|warnings.warn|^\\\\s*$')",
       "Bash(echo \"exit=$?\")",
-      "Bash(git check-ignore *)"
+      "Bash(git check-ignore *)",
+      "Bash(/c/Users/satui/anaconda3/envs/thesisss/python.exe -c \"import torch; print\\('torch', torch.__version__, 'cuda?', torch.cuda.is_available\\(\\)\\)\")",
+      "Bash(/c/Users/satui/anaconda3/envs/thesisss/python.exe)",
+      "Bash(/c/Users/satui/anaconda3/envs/thesisss/python.exe c:/tmp/build_nb.py)"
     ]
   }
 }

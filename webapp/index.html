@@ -878,6 +878,7 @@
       }
       const stdErr = Math.sqrt(ssRes / Math.max(n - cols, 1));
 
+      if (!coeffs.every(Number.isFinite) || !Number.isFinite(stdErr)) return null;
       return { coeffs, stdErr };
     }
 
@@ -890,22 +891,31 @@
 
       const startMs = Date.now() - historyHrs * 3600 * 1000;
 
+      const nowMs = Date.now();
       db.ref(`devices/${nodeId}/readings`)
         .orderByChild('timestamp')
         .startAt(startMs)
+        .endAt(nowMs)
         .once('value', snap => {
           const rawData = [];
           snap.forEach(child => {
             const d = child.val();
-            if (d.timestamp && d.waterLevel_cm != null) {
+            if (d.timestamp && d.timestamp <= nowMs && d.waterLevel_cm != null) {
               const wl = distanceToWaterLevel(d.waterLevel_cm, nodeId);
-              const fr = d.flowRate_lpm != null ? d.flowRate_lpm : 0;
+              const fr = d.flowRate_lpm != null ? d.flowRate_lpm : null;
               rawData.push({ t: d.timestamp, wl, fr });
             }
           });
+          rawData.sort((a, b) => a.t - b.t);
 
-          const actual    = rawData.map(d => ({ x: d.t, y: d.wl }));
-          const flowData  = rawData.map(d => ({ x: d.t, y: d.fr }));
+          const actual   = rawData.map(d => ({ x: d.t, y: d.wl }));
+
+          // Fill null flow values with carry-forward to avoid fabricated zero derivatives
+          let lastKnownFr = rawData.find(d => d.fr != null)?.fr ?? 0;
+          rawData.forEach(d => {
+            if (d.fr != null) { lastKnownFr = d.fr; } else { d.fr = lastKnownFr; }
+          });
+          const flowData = rawData.map(d => ({ x: d.t, y: d.fr }));
 
           if (rawData.length < 4) {
             predChart.data.datasets = [
@@ -944,11 +954,21 @@
             fallbackReg = multipleRegression(normalized);
           }
 
-          const model = reg || fallbackReg;
+          let model = reg || fallbackReg;
+          // Last resort: slope from last two points so chart never goes blank
+          if (!model && rawData.length >= 2) {
+            const lastTwo = rawData.slice(-2);
+            const dtLast = (lastTwo[1].t - lastTwo[0].t) / 60000 || 1;
+            const slope = (lastTwo[1].wl - lastTwo[0].wl) / dtLast;
+            const intercept = lastTwo[1].wl - slope * ((lastTwo[1].t - rawData[0].t) / 60000);
+            model = { coeffs: [intercept, slope], stdErr: Math.abs(slope) * 2 + 1 };
+          }
           if (!model) {
             predChart.data.datasets = [
-              { label: 'Actual Water Level', data: actual, borderColor: '#4fc3f7', backgroundColor: '#4fc3f722', borderWidth: 2, pointRadius: 3, tension: 0.3, fill: false }
+              { label: 'Actual Water Level', data: actual, borderColor: '#4fc3f7', backgroundColor: '#4fc3f722', borderWidth: 2, pointRadius: 3, tension: 0.3, fill: false },
+              { label: 'Flow Rate (L/min)', data: flowData, borderColor: '#81c784', backgroundColor: '#81c78422', borderWidth: 1.5, pointRadius: 0, tension: 0.3, fill: false, yAxisID: 'yFlow', borderDash: [3, 3] }
             ];
+            predChart.options.scales.yFlow = { display: true, position: 'right', title: { display: true, text: 'Flow (L/min)', color: '#81c784' }, grid: { display: false }, ticks: { color: '#81c784' } };
             predChart.update();
             return;
           }
@@ -1114,10 +1134,11 @@
                 const points = [], upper = [], lower = [];
                 const horizons = ['10', '30', '60'];
                 let crossingMsg = null;
+                const forecastOrigin = refFc.generated_at ? new Date(refFc.generated_at).getTime() : lastRaw.t;
                 horizons.forEach(h => {
                   const f = fc[h];
                   if (!f || f.value_cm == null) return;
-                  const t = lastRaw.t + parseInt(h) * 60000;
+                  const t = forecastOrigin + parseInt(h) * 60000;
                   points.push({ x: t, y: f.value_cm });
                   upper.push({ x: t, y: f.ci_upper_cm });
                   lower.push({ x: t, y: f.ci_lower_cm });
