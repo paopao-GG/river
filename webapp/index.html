@@ -360,8 +360,7 @@
           <label>History:</label>
           <select id="pred-history-select" onchange="reloadPrediction()">
             <option value="1">Last 1 Hour</option>
-            <option value="6" selected>Last 6 Hours</option>
-            <option value="24">Last 24 Hours</option>
+            <option value="24" selected>Last 24 Hours</option>
           </select>
         </div>
         <div>
@@ -369,10 +368,9 @@
           <select id="pred-forecast-select" onchange="reloadPrediction()">
             <option value="30">30 min</option>
             <option value="60" selected>1 hour</option>
-            <option value="180">3 hours</option>
-            <option value="360">6 hours</option>
           </select>
         </div>
+        <button id="export-pred-btn" class="range-btn" onclick="exportPredictionCSV()" style="margin-left:auto;" disabled>Export Prediction CSV</button>
       </div>
       <div class="prediction-legend">
         <span><span class="legend-line" style="background:#4fc3f7"></span> Actual</span>
@@ -432,6 +430,7 @@
     let activeAlerts = new Set();
     let chartHours   = 1;
     let chart;
+    let lastPrediction = null; // { nodeId, predPoints, upperBand, lowerBand, sarimaxPoints }
     let predChart;
 
     // ================================================================
@@ -810,6 +809,8 @@
               grid: { color: '#1e2d3d' }
             },
             y: {
+              min: 0,
+              suggestedMax: MAX_WATER_LEVEL_CM,
               ticks: { color: '#7a9bb5' },
               grid: { color: '#1e2d3d' },
               title: { display: true, color: '#7a9bb5', text: 'Water Level (cm)' }
@@ -925,21 +926,32 @@
             return;
           }
 
-          // Compute rate-of-change features
-          const t0 = rawData[0].t;
+          // Smooth sensor inputs (5-sample centred rolling mean) to suppress
+          // noise-driven derivative blowups. Raw data is kept for chart display.
+          const half = 2;
+          const smoothed = rawData.map((d, i) => {
+            const lo = Math.max(0, i - half);
+            const hi = Math.min(rawData.length, i + half + 1);
+            let wlSum = 0, frSum = 0, n = 0;
+            for (let j = lo; j < hi; j++) { wlSum += rawData[j].wl; frSum += rawData[j].fr; n++; }
+            return { t: d.t, wl: wlSum / n, fr: frSum / n };
+          });
+
+          // Compute rate-of-change features on smoothed data
+          const t0 = smoothed[0].t;
           const regData = [];
-          for (let i = 1; i < rawData.length; i++) {
-            const dt = (rawData[i].t - rawData[i - 1].t) / 60000; // minutes
+          for (let i = 1; i < smoothed.length; i++) {
+            const dt = (smoothed[i].t - smoothed[i - 1].t) / 60000; // minutes
             if (dt <= 0) continue;
-            const tNorm      = (rawData[i].t - t0) / 60000;
-            const levelRate  = (rawData[i].wl - rawData[i - 1].wl) / dt;  // cm/min
-            const flowRate   = rawData[i].fr;
-            const flowChange = (rawData[i].fr - rawData[i - 1].fr) / dt;  // L/min/min
+            const tNorm      = (smoothed[i].t - t0) / 60000;
+            const levelRate  = (smoothed[i].wl - smoothed[i - 1].wl) / dt;  // cm/min
+            const flowRate   = smoothed[i].fr;
+            const flowChange = (smoothed[i].fr - smoothed[i - 1].fr) / dt;  // L/min/min
 
             // Features: [time, level_change_rate, flow_rate, flow_change_rate]
             regData.push({
               features: [tNorm, levelRate, flowRate, flowChange],
-              y: rawData[i].wl
+              y: smoothed[i].wl
             });
           }
 
@@ -948,17 +960,17 @@
           // Fallback: simple time-based regression if multivariate fails
           let fallbackReg = null;
           if (!reg) {
-            const normalized = rawData.map(d => ({ features: [(d.t - t0) / 60000], y: d.wl }));
+            const normalized = smoothed.map(d => ({ features: [(d.t - t0) / 60000], y: d.wl }));
             fallbackReg = multipleRegression(normalized);
           }
 
           let model = reg || fallbackReg;
-          // Last resort: slope from last two points so chart never goes blank
-          if (!model && rawData.length >= 2) {
-            const lastTwo = rawData.slice(-2);
+          // Last resort: slope from last two smoothed points so chart never goes blank
+          if (!model && smoothed.length >= 2) {
+            const lastTwo = smoothed.slice(-2);
             const dtLast = (lastTwo[1].t - lastTwo[0].t) / 60000 || 1;
             const slope = (lastTwo[1].wl - lastTwo[0].wl) / dtLast;
-            const intercept = lastTwo[1].wl - slope * ((lastTwo[1].t - rawData[0].t) / 60000);
+            const intercept = lastTwo[1].wl - slope * ((lastTwo[1].t - smoothed[0].t) / 60000);
             model = { coeffs: [intercept, slope], stdErr: Math.abs(slope) * 2 + 1 };
           }
           if (!model) {
@@ -980,11 +992,11 @@
           const lowerBand  = [];
           const confidence = 1.96;
 
-          // For multivariate: extrapolate using last known rates
-          const lastDt = rawData.length >= 2 ? (rawData[rawData.length - 1].t - rawData[rawData.length - 2].t) / 60000 : 1;
-          const lastLevelRate = rawData.length >= 2 ? (rawData[rawData.length - 1].wl - rawData[rawData.length - 2].wl) / Math.max(lastDt, 0.1) : 0;
-          const lastFlowRate  = lastRaw.fr;
-          const lastFlowChange = rawData.length >= 2 ? (rawData[rawData.length - 1].fr - rawData[rawData.length - 2].fr) / Math.max(lastDt, 0.1) : 0;
+          // For multivariate: extrapolate using last known smoothed rates
+          const lastDt = smoothed.length >= 2 ? (smoothed[smoothed.length - 1].t - smoothed[smoothed.length - 2].t) / 60000 : 1;
+          const lastLevelRate = smoothed.length >= 2 ? (smoothed[smoothed.length - 1].wl - smoothed[smoothed.length - 2].wl) / Math.max(lastDt, 0.1) : 0;
+          const lastFlowRate  = smoothed[smoothed.length - 1].fr;
+          const lastFlowChange = smoothed.length >= 2 ? (smoothed[smoothed.length - 1].fr - smoothed[smoothed.length - 2].fr) / Math.max(lastDt, 0.1) : 0;
 
           let prevWl = lastRaw.wl;
           let prevFr = lastRaw.fr;
@@ -1016,6 +1028,9 @@
             lowerBand.push({ x: t, y: Math.max(0, yPred - uncertainty) });
             prevWl = yPred;
           }
+
+          // Store regression-only prediction so export works even if SARIMAX is offline
+          lastPrediction = { nodeId, predPoints, upperBand, lowerBand, sarimaxPoints: [] };
 
           const datasets = [];
           const cfg = nodeConfigs[nodeId];
@@ -1104,6 +1119,7 @@
           };
 
           // Overlay server-side SARIMAX forecast (only published for Centro / station-01)
+          let sarimaxPoints = []; // scoped outside callback so export always has a reference
           db.ref(`devices/${nodeId}/forecast`).once('value', fcSnap => {
             const fc = fcSnap.val();
             const banner = document.getElementById('sarimax-banner');
@@ -1144,6 +1160,7 @@
                     crossingMsg = `SARIMAX: forecast 95% CI upper bound (${f.ci_upper_cm.toFixed(1)}cm) exceeds alert threshold (${threshold}cm) within ${h} min.`;
                   }
                 });
+                sarimaxPoints = points;
                 if (points.length) {
                   datasets.push({
                     label: 'SARIMAX',
@@ -1172,6 +1189,10 @@
             } else {
               banner.style.display = 'none';
             }
+            // Patch sarimaxPoints into lastPrediction and enable export button
+            if (lastPrediction) lastPrediction.sarimaxPoints = sarimaxPoints;
+            const exportBtn = document.getElementById('export-pred-btn');
+            if (exportBtn) exportBtn.disabled = false;
             predChart.data.datasets = datasets;
             predChart.update();
           });
@@ -1232,6 +1253,26 @@
             }
           });
       });
+    }
+
+    function exportPredictionCSV() {
+      if (!lastPrediction || !lastPrediction.predPoints.length) return;
+      const { nodeId, predPoints, upperBand, lowerBand, sarimaxPoints } = lastPrediction;
+      const station = NODE_NAMES[nodeId] || nodeId;
+      const sarimaxByT = new Map(sarimaxPoints.map(p => [p.x, p.y]));
+      const header = 'Station,Node,Timestamp,DateTime,Predicted Level (cm),CI Lower (cm),CI Upper (cm),SARIMAX (cm)';
+      const rows = predPoints.map((p, i) => {
+        const sx = sarimaxByT.get(p.x);
+        return `${station},${NODE_LABELS[nodeId] || nodeId},${p.x},"${new Date(p.x).toLocaleString()}",${p.y.toFixed(2)},${lowerBand[i].y.toFixed(2)},${upperBand[i].y.toFixed(2)},${sx != null ? sx.toFixed(2) : ''}`;
+      });
+      const csv = header + '\n' + rows.join('\n');
+      const blob = new Blob([csv], { type: 'text/csv' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `prediction-${nodeId}-${new Date().toISOString().slice(0,16).replace(/:/g,'-')}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
     }
 
     function timeAgo(epochSeconds) {
