@@ -360,8 +360,7 @@
           <label>History:</label>
           <select id="pred-history-select" onchange="reloadPrediction()">
             <option value="1">Last 1 Hour</option>
-            <option value="6" selected>Last 6 Hours</option>
-            <option value="24">Last 24 Hours</option>
+            <option value="24" selected>Last 24 Hours</option>
           </select>
         </div>
         <div>
@@ -369,10 +368,9 @@
           <select id="pred-forecast-select" onchange="reloadPrediction()">
             <option value="30">30 min</option>
             <option value="60" selected>1 hour</option>
-            <option value="180">3 hours</option>
-            <option value="360">6 hours</option>
           </select>
         </div>
+        <button id="export-pred-btn" class="range-btn" onclick="exportPredictionCSV()" style="margin-left:auto;" disabled>Export Prediction CSV</button>
       </div>
       <div class="prediction-legend">
         <span><span class="legend-line" style="background:#4fc3f7"></span> Actual</span>
@@ -430,6 +428,7 @@
     let chartHours   = 1;
     let chart;
     let predChart;
+    let lastPrediction = null; // { nodeId, predPoints, upperBand, lowerBand }
 
     // ================================================================
     // INIT
@@ -807,6 +806,8 @@
               grid: { color: '#1e2d3d' }
             },
             y: {
+              min: 0,
+              suggestedMax: MAX_WATER_LEVEL_CM,
               ticks: { color: '#7a9bb5' },
               grid: { color: '#1e2d3d' },
               title: { display: true, color: '#7a9bb5', text: 'Water Level (cm)' }
@@ -886,9 +887,18 @@
             return;
           }
 
+          // 5-sample centred rolling mean to suppress noise-driven slope blowups
+          const half = 2;
+          const smoothedActual = actual.map((p, i) => {
+            const lo = Math.max(0, i - half), hi = Math.min(actual.length, i + half + 1);
+            let s = 0, n = 0;
+            for (let j = lo; j < hi; j++) { s += actual[j].y; n++; }
+            return { x: p.x, y: s / n };
+          });
+
           // Normalize timestamps to minutes for numerical stability
-          const t0 = actual[0].x;
-          const normalized = actual.map(p => ({
+          const t0 = smoothedActual[0].x;
+          const normalized = smoothedActual.map(p => ({
             x: (p.x - t0) / 60000,  // minutes from first point
             y: p.y
           }));
@@ -930,6 +940,11 @@
             upperBand.push({ x: t, y: Math.max(0, yPred + uncertainty) });
             lowerBand.push({ x: t, y: Math.max(0, yPred - uncertainty) });
           }
+
+          // Store prediction for CSV export and enable button
+          lastPrediction = { nodeId, predPoints, upperBand, lowerBand };
+          const exportBtn = document.getElementById('export-pred-btn');
+          if (exportBtn) exportBtn.disabled = false;
 
           // Alert threshold line (if configured)
           const datasets = [];
@@ -1057,6 +1072,24 @@
             }
           });
       });
+    }
+
+    function exportPredictionCSV() {
+      if (!lastPrediction || !lastPrediction.predPoints.length) return;
+      const { nodeId, predPoints, upperBand, lowerBand } = lastPrediction;
+      const station = NODE_NAMES[nodeId] || nodeId;
+      const header = 'Station,Node,Timestamp,DateTime,Predicted Level (cm),CI Lower (cm),CI Upper (cm)';
+      const rows = predPoints.map((p, i) =>
+        `${station},${NODE_LABELS[nodeId] || nodeId},${p.x},"${new Date(p.x).toLocaleString()}",${p.y.toFixed(2)},${lowerBand[i].y.toFixed(2)},${upperBand[i].y.toFixed(2)}`
+      );
+      const csv = header + '\n' + rows.join('\n');
+      const blob = new Blob([csv], { type: 'text/csv' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `prediction-${nodeId}-${new Date().toISOString().slice(0,16).replace(/:/g,'-')}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
     }
 
     function timeAgo(epochSeconds) {
