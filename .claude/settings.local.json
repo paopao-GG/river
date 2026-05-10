@@ -59,7 +59,11 @@
       "Bash(git check-ignore *)",
       "Bash(/c/Users/satui/anaconda3/envs/thesisss/python.exe -c \"import torch; print\\('torch', torch.__version__, 'cuda?', torch.cuda.is_available\\(\\)\\)\")",
       "Bash(/c/Users/satui/anaconda3/envs/thesisss/python.exe)",
-      "Bash(/c/Users/satui/anaconda3/envs/thesisss/python.exe c:/tmp/build_nb.py)"
+      "Bash(/c/Users/satui/anaconda3/envs/thesisss/python.exe c:/tmp/build_nb.py)",
+      "Bash(grep -E \"\\\\.\\(py|json\\)$\")",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)"
     ]
   }
 }

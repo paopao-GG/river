@@ -804,7 +804,7 @@
           scales: {
             x: {
               type: 'time',
-              time: { unit: 'minute', displayFormats: { minute: 'HH:mm', hour: 'MMM d HH:mm' } },
+              time: { displayFormats: { minute: 'HH:mm', hour: 'MMM d HH:mm' } },
               ticks: { color: '#7a9bb5', maxTicksLimit: 10 },
               grid: { color: '#1e2d3d' }
             },
@@ -1001,7 +1001,7 @@
           let prevWl = lastRaw.wl;
           let prevFr = lastRaw.fr;
 
-          for (let t = lastRaw.t; t <= lastRaw.t + forecastMs; t += predStep) {
+          for (let t = lastRaw.t + predStep; t <= lastRaw.t + forecastMs; t += predStep) {
             const tNorm = (t - t0) / 60000;
             const stepMin = predStep / 60000;
             let yPred;
@@ -1030,7 +1030,13 @@
           }
 
           // Store regression-only prediction so export works even if SARIMAX is offline
-          lastPrediction = { nodeId, predPoints, upperBand, lowerBand, sarimaxPoints: [] };
+          lastPrediction = {
+            nodeId,
+            actualTime: lastRaw.t,
+            actualValue: lastRaw.wl,
+            predPoints, upperBand, lowerBand,
+            sarimaxPoints: []
+          };
 
           const datasets = [];
           const cfg = nodeConfigs[nodeId];
@@ -1193,6 +1199,7 @@
             if (lastPrediction) lastPrediction.sarimaxPoints = sarimaxPoints;
             const exportBtn = document.getElementById('export-pred-btn');
             if (exportBtn) exportBtn.disabled = false;
+            predChart.options.scales.x.time.unit = historyHrs >= 6 ? 'hour' : 'minute';
             predChart.data.datasets = datasets;
             predChart.update();
           });
@@ -1257,13 +1264,14 @@
 
     function exportPredictionCSV() {
       if (!lastPrediction || !lastPrediction.predPoints.length) return;
-      const { nodeId, predPoints, upperBand, lowerBand, sarimaxPoints } = lastPrediction;
+      const { nodeId, actualTime, actualValue, predPoints, upperBand, lowerBand, sarimaxPoints } = lastPrediction;
       const station = NODE_NAMES[nodeId] || nodeId;
       const sarimaxByT = new Map(sarimaxPoints.map(p => [p.x, p.y]));
-      const header = 'Station,Node,Timestamp,DateTime,Predicted Level (cm),CI Lower (cm),CI Upper (cm),SARIMAX (cm)';
+      const actualTimeStr = new Date(actualTime).toLocaleString();
+      const header = 'Station,Node,Actual Time,Forecast Time,Actual (cm),Predicted (cm),CI Lower (cm),CI Upper (cm),SARIMAX (cm)';
       const rows = predPoints.map((p, i) => {
         const sx = sarimaxByT.get(p.x);
-        return `${station},${NODE_LABELS[nodeId] || nodeId},${p.x},"${new Date(p.x).toLocaleString()}",${p.y.toFixed(2)},${lowerBand[i].y.toFixed(2)},${upperBand[i].y.toFixed(2)},${sx != null ? sx.toFixed(2) : ''}`;
+        return `${station},${NODE_LABELS[nodeId] || nodeId},"${actualTimeStr}","${new Date(p.x).toLocaleString()}",${actualValue.toFixed(2)},${p.y.toFixed(2)},${lowerBand[i].y.toFixed(2)},${upperBand[i].y.toFixed(2)},${sx != null ? sx.toFixed(2) : ''}`;
       });
       const csv = header + '\n' + rows.join('\n');
       const blob = new Blob([csv], { type: 'text/csv' });
