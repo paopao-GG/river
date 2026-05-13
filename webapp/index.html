@@ -984,6 +984,10 @@
           }
 
           // Generate prediction points
+          // Approach: estimate the current slope (cm/min) from the model evaluated
+          // at the last known point, then propagate forward with that slope decaying
+          // exponentially toward zero. This guarantees a smooth, monotonic-in-slope
+          // forecast that starts exactly at the last actual reading.
           const lastRaw    = rawData[rawData.length - 1];
           const forecastMs = forecastMin * 60 * 1000;
           const predStep   = Math.max(forecastMin / 30, 1) * 60000;
@@ -992,41 +996,37 @@
           const lowerBand  = [];
           const confidence = 1.96;
 
-          // For multivariate: extrapolate using last known smoothed rates
           const lastDt = smoothed.length >= 2 ? (smoothed[smoothed.length - 1].t - smoothed[smoothed.length - 2].t) / 60000 : 1;
           const lastLevelRate = smoothed.length >= 2 ? (smoothed[smoothed.length - 1].wl - smoothed[smoothed.length - 2].wl) / Math.max(lastDt, 0.1) : 0;
           const lastFlowRate  = smoothed[smoothed.length - 1].fr;
           const lastFlowChange = smoothed.length >= 2 ? (smoothed[smoothed.length - 1].fr - smoothed[smoothed.length - 2].fr) / Math.max(lastDt, 0.1) : 0;
 
-          let prevWl = lastRaw.wl;
-          let prevFr = lastRaw.fr;
-
-          for (let t = lastRaw.t + predStep; t <= lastRaw.t + forecastMs; t += predStep) {
-            const tNorm = (t - t0) / 60000;
-            const stepMin = predStep / 60000;
-            let yPred;
-
+          // Estimate initial slope (cm/min) by sampling the model 1 minute apart at the last point
+          const tLastNorm = (lastRaw.t - t0) / 60000;
+          const evalModel = (tn) => {
             if (reg) {
-              // Use multivariate model with decaying rates toward zero
-              const progress = (t - lastRaw.t) / forecastMs; // 0 to 1
-              const decay = Math.exp(-2 * progress); // rates decay over time
-              const curLevelRate = lastLevelRate * decay;
-              const curFlowRate  = prevFr;
-              const curFlowChange = lastFlowChange * decay;
-              yPred = model.coeffs[0] + model.coeffs[1] * tNorm + model.coeffs[2] * curLevelRate + model.coeffs[3] * curFlowRate + model.coeffs[4] * curFlowChange;
-              prevFr = prevFr + curFlowChange * stepMin;
-            } else {
-              yPred = model.coeffs[0] + model.coeffs[1] * tNorm;
+              return model.coeffs[0] + model.coeffs[1] * tn + model.coeffs[2] * lastLevelRate + model.coeffs[3] * lastFlowRate + model.coeffs[4] * lastFlowChange;
             }
+            return model.coeffs[0] + model.coeffs[1] * tn;
+          };
+          const initialSlope = evalModel(tLastNorm + 1) - evalModel(tLastNorm); // cm/min
 
-            yPred = Math.max(0, Math.min(MAX_WATER_LEVEL_CM, yPred));
+          let y = lastRaw.wl;
+          let prevT = lastRaw.t;
+          for (let t = lastRaw.t + predStep; t <= lastRaw.t + forecastMs; t += predStep) {
+            const dtMin = (t - prevT) / 60000;
+            const progress = (t - lastRaw.t) / forecastMs; // 0 to 1
+            const slope = initialSlope * Math.exp(-2 * progress); // decay toward 0
+            y = y + slope * dtMin;
+            y = Math.max(0, Math.min(MAX_WATER_LEVEL_CM, y));
+
             const distFromEnd = (t - lastRaw.t) / 60000;
             const uncertainty = model.stdErr * confidence * (1 + distFromEnd / (rawData.length * 0.5));
 
-            predPoints.push({ x: t, y: yPred });
-            upperBand.push({ x: t, y: Math.min(MAX_WATER_LEVEL_CM, Math.max(0, yPred + uncertainty)) });
-            lowerBand.push({ x: t, y: Math.max(0, yPred - uncertainty) });
-            prevWl = yPred;
+            predPoints.push({ x: t, y });
+            upperBand.push({ x: t, y: Math.min(MAX_WATER_LEVEL_CM, y + uncertainty) });
+            lowerBand.push({ x: t, y: Math.max(0, y - uncertainty) });
+            prevT = t;
           }
 
           // Store regression-only prediction so export works even if SARIMAX is offline
